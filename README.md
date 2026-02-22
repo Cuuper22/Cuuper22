@@ -1,32 +1,23 @@
-## Hey, I'm Ben 👋
+### Ben
 
-I build tools and APIs that developers and businesses actually use.
+I make dev tools and APIs. Based in SF.
 
-### Products
+**What I'm working on:**
 
-| Product | What it does | Price |
-|---------|-------------|-------|
-| [**FormDrop**](https://bennycutools.com/formdrop.html) | Form backend API — add contact forms to any site in 60 seconds | Free / $3/mo |
-| [**DataDig**](https://bennycutools.com/products.html) | Extract emails, phones, text from any URL | Free / $19/mo |
-| [**ScreenSnap**](https://bennycutools.com/products.html) | Website screenshot API | Free / $9/mo |
-| [**LinkSnap**](https://bennycutools.com/linksnap.html) | URL shortener with click analytics | Free / $2/mo |
-| [**TextForge**](https://bennycutools.com/products.html) | AI text generation API | Free / $19/mo |
-| [**250+ Business Tools**](https://bennycutools.com/directory.html) | Custom tools for local businesses | $99 each |
+[FormDrop](https://bennycutools.com/formdrop.html) — form backend, $3/mo (Formspree is $8, Netlify is $19)
 
-### Free Tools
-- [Website Grader](https://bennycutools.com/website-grader.html) — Free SEO audit for any URL
-- [QR Code Generator](https://bennycutools.com/qr-code-generator.html) — Generate QR codes instantly
-- [Tool Directory](https://bennycutools.com/directory.html) — Browse 250+ business tools
+[DataDig](https://bennycutools.com/products.html) — pull emails/phones/text from any URL, one GET request
 
-### Open Source
-- [SaaS Starter Kit](https://github.com/Cuuper22/saas-starter-kit) — Full-stack SaaS boilerplate
-- [Free Website Templates](https://github.com/Cuuper22/free-website-templates) — Clean, responsive templates
-- [Web Scraping API](https://github.com/Cuuper22/web-scraping-api) — Extract data from websites
+[ScreenSnap](https://bennycutools.com/products.html) — screenshot any URL, returns PNG
 
-### Apify Actors
-- [Website Contact Extractor](https://apify.com/cerebral_aluminum/website-contact-extractor) — Batch extract emails & phones
-- [Google Maps Email Scraper](https://apify.com/cerebral_aluminum/google-maps-email-scraper) — Find business contacts
+[QuickTools](https://t.me/Quuicktools_bot) — Telegram bot with all of the above + AI + QR + TTS
 
----
+**Open source:**
 
-**Need something custom?** [ben@bennycutools.com](mailto:ben@bennycutools.com)
+[saas-starter-kit](https://github.com/Cuuper22/saas-starter-kit) — Node + Stripe + Auth, skip the boilerplate
+
+[web-scraping-api](https://github.com/Cuuper22/web-scraping-api) — self-hostable scraper
+
+[screenshot-api](https://github.com/Cuuper22/screenshot-api) — self-hostable screenshot service
+
+**Contact:** ben@bennycutools.com
