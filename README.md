@@ -1,19 +1,32 @@
-### Hi, I'm Ben 👋
+## Hey, I'm Ben 👋
 
-Solo developer who ships fast. I build APIs, starter kits, and tools for businesses.
+I build tools and APIs that developers and businesses actually use.
 
-**What I'm Working On:**
-- 🚀 [SaaS Starter Kit](https://github.com/Cuuper22/saas-starter-kit) — Node.js + Stripe + Auth boilerplate ($49)
-- 📸 [Screenshot API](https://github.com/Cuuper22/screenshot-api) — Turn any URL into a PNG ($9/mo)
-- 🔍 [Web Scraping API](https://github.com/Cuuper22/web-scraping-api) — Extract emails, phones, text ($19/mo)
-- 🌐 [200+ Business Tools](https://bennycutools.com/directory.html) — Free estimators for service businesses
+### Products
 
-**Services:**
-- ⚡ Rush Web Development — $199, 48hr delivery
-- 🤝 White-label dev for agencies — [bennycutools.com/partners](https://bennycutools.com/partners.html)
+| Product | What it does | Price |
+|---------|-------------|-------|
+| [**FormDrop**](https://bennycutools.com/formdrop.html) | Form backend API — add contact forms to any site in 60 seconds | Free / $3/mo |
+| [**DataDig**](https://bennycutools.com/products.html) | Extract emails, phones, text from any URL | Free / $19/mo |
+| [**ScreenSnap**](https://bennycutools.com/products.html) | Website screenshot API | Free / $9/mo |
+| [**LinkSnap**](https://bennycutools.com/linksnap.html) | URL shortener with click analytics | Free / $2/mo |
+| [**TextForge**](https://bennycutools.com/products.html) | AI text generation API | Free / $19/mo |
+| [**250+ Business Tools**](https://bennycutools.com/directory.html) | Custom tools for local businesses | $99 each |
 
-**Try Free:**
-- [Website Grader](https://bennycutools.com/website-grader.html) — Score any website
-- [QR Code Generator](https://bennycutools.com/qr-code-generator.html) — Instant QR codes
+### Free Tools
+- [Website Grader](https://bennycutools.com/website-grader.html) — Free SEO audit for any URL
+- [QR Code Generator](https://bennycutools.com/qr-code-generator.html) — Generate QR codes instantly
+- [Tool Directory](https://bennycutools.com/directory.html) — Browse 250+ business tools
 
-📫 **ben@bennycutools.com** | [bennycutools.com](https://bennycutools.com)
+### Open Source
+- [SaaS Starter Kit](https://github.com/Cuuper22/saas-starter-kit) — Full-stack SaaS boilerplate
+- [Free Website Templates](https://github.com/Cuuper22/free-website-templates) — Clean, responsive templates
+- [Web Scraping API](https://github.com/Cuuper22/web-scraping-api) — Extract data from websites
+
+### Apify Actors
+- [Website Contact Extractor](https://apify.com/cerebral_aluminum/website-contact-extractor) — Batch extract emails & phones
+- [Google Maps Email Scraper](https://apify.com/cerebral_aluminum/google-maps-email-scraper) — Find business contacts
+
+---
+
+**Need something custom?** [ben@bennycutools.com](mailto:ben@bennycutools.com)
