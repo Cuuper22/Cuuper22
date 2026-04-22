@@ -1,0 +1,104 @@
+
+  ████████████████████████████████████████████████████
+  ██      CONTAINER SECURITY AUDIT REPORT v2       ██
+  ████████████████████████████████████████████████████
+
+  Host    : cb92b62ee437
+  Date    : 2026-04-22 06:40:07.680996
+  User    : uid=0(root) gid=0(root) groups=0(root)
+  PID     : 11588
+  Script  : container_audit.py
+  Python  : 3.12.12
+  Output  : logs/audit_section14_latest.log
+
+  Severity labels:
+    [0;31m[RISK][0m = confirmed attack surface — act on these
+    [0;33m[WARN][0m = notable — may be exploitable depending on context
+    [0;32m[PASS][0m = check ran, result is secure
+    [0;36m[INFO][0m = neutral, context for interpreting results
+    [0;35m[NOTE][0m = explanation of what the check means
+  ████████████████████████████████████████████████████
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  14. ORCHESTRATION, SECRETS, AND ESCAPE ARTIFACTS              ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Looks for high-impact artifacts used in cloud/container breakouts and credential theft.
+
+  ┌─ Container engine control sockets
+  [0;35m[NOTE][0m  Writable Docker/Podman/containerd sockets usually imply host-level control.
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/docker.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/docker.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /run/docker.sock
+  [0;32m[PASS][0m  Not present: /run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /var/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /var/run/docker.sock
+  [0;32m[PASS][0m  Not present: /var/run/podman/podman.sock
+
+  ┌─ Kubernetes service account and pod identity artifacts
+  [0;35m[NOTE][0m  Mounted service account tokens can grant API access and enable lateral movement.
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/token
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/namespace
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  [0;36m[INFO][0m  No Kubernetes service account files detected
+
+  ┌─ Generic mounted secrets and cloud credentials
+  [0;35m[NOTE][0m  Checks common secret mount points and cloud credential file locations.
+  [0;32m[PASS][0m  No common mounted secret or cloud credential files found
+
+  ┌─ Cloud metadata service reachability
+  [0;35m[NOTE][0m  If metadata endpoints are reachable, temporary cloud credentials may be harvestable.
+    /usr/bin/curl
+
+    $ curl -sS -m 2 -o /dev/null -w '%{http_code}' -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token
+    503
+  [0;36m[INFO][0m  AWS IMDSv2 token endpoint responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/
+    503
+  [0;36m[INFO][0m  AWS IMDSv1 root responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -H 'Metadata-Flavor: Google' -o /dev/null -w '%{http_code}' http://169.254.169.254/computeMetadata/v1/
+    503
+  [0;36m[INFO][0m  GCP metadata responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -H Metadata:true -o /dev/null -w '%{http_code}' 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'
+    503
+  [0;36m[INFO][0m  Azure metadata responded with non-auth status HTTP 503
+
+  ┌─ cgroup release_agent and notify_on_release checks
+  [0;35m[NOTE][0m  Misconfigured cgroup release_agent can be abused for host command execution.
+  [0;32m[PASS][0m  Not present: /sys/fs/cgroup/release_agent
+  [0;32m[PASS][0m  Not present: /sys/fs/cgroup/notify_on_release
+
+  ┌─ Sensitive runtime files commonly harvested by attackers
+  [0;32m[PASS][0m  Not present: /root/.kube/config
+  [0;32m[PASS][0m  Not present: /etc/kubernetes/kubelet.conf
+  [0;32m[PASS][0m  Not present: /etc/kubernetes/admin.conf
+  [0;32m[PASS][0m  Not present: /var/lib/kubelet/kubeconfig
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  AUDIT COMPLETE — SUMMARY                                      ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [0;31m[RISK][0m     0   confirmed attack surface — act on these
+  [0;33m[WARN][0m     0   notable — may be exploitable depending on context
+  [0;32m[PASS][0m    22   checks confirmed secure
+  [0;36m[INFO][0m     5   informational notes
+
+
+  [1mFull RISK finding list:[0m
+
+  Filter commands (run on saved output):
+    All RISK:  grep '\[RISK\]' <outfile>
+    All WARN:  grep '\[WARN\]' <outfile>
+    Section:   grep -A 200 '4\. PRIVILEGE' <outfile>
+
+=== AUDIT END 2026-04-22 06:40:09.861329 ===
+Output saved to: logs/audit_section14_latest.log

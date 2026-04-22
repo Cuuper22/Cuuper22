@@ -4,7 +4,7 @@ Container Security Audit v2 — Python rewrite
 Philosophy: raw output first, interpretation second. No silent failures.
 Every flagged file gets read and printed. Every check shows its command.
 """
-import os, sys, re, json, socket, stat, struct, datetime, subprocess, ipaddress
+import os, sys, re, json, socket, stat, struct, datetime, subprocess, ipaddress, glob
 from pathlib import Path
 
 # ─── ANSI colors ────────────────────────────────────────────────────────────
@@ -1410,6 +1410,148 @@ def section_tools():
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# 14. ORCHESTRATION, SECRETS, AND ESCAPE ARTIFACTS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def section_orchestration():
+    HDR("14. ORCHESTRATION, SECRETS, AND ESCAPE ARTIFACTS")
+    NOTE("Looks for high-impact artifacts used in cloud/container breakouts and credential theft.")
+
+    SUB("Container engine control sockets")
+    NOTE("Writable Docker/Podman/containerd sockets usually imply host-level control.")
+    sockets = [
+        "/var/run/docker.sock",
+        "/run/docker.sock",
+        "/var/run/podman/podman.sock",
+        "/run/podman/podman.sock",
+        "/run/containerd/containerd.sock",
+        "/var/run/containerd/containerd.sock",
+    ]
+    # Also check host-mounted view via PID 1 rootfs (common in some constrained sandboxes).
+    sockets += [f"/proc/1/root{p}" for p in sockets]
+
+    for sp in sorted(set(sockets)):
+        if os.path.exists(sp):
+            p = file_perms(sp)
+            if stat.S_ISSOCK(os.stat(sp, follow_symlinks=False).st_mode):
+                INFO(f"Socket file type confirmed: {sp}")
+            if os.access(sp, os.W_OK):
+                RISK(f"Writable runtime socket: {sp}  ({p})")
+            else:
+                WARN(f"Runtime socket present: {sp}  ({p})")
+        else:
+            PASS(f"Not present: {sp}")
+
+    SUB("Kubernetes service account and pod identity artifacts")
+    NOTE("Mounted service account tokens can grant API access and enable lateral movement.")
+    k8s_paths = [
+        "/var/run/secrets/kubernetes.io/serviceaccount/token",
+        "/var/run/secrets/kubernetes.io/serviceaccount/namespace",
+        "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt",
+    ]
+    found_k8s = False
+    for kp in k8s_paths:
+        if os.path.exists(kp):
+            found_k8s = True
+            p = file_perms(kp)
+            WARN(f"Kubernetes secret artifact present: {kp}  ({p})")
+            if kp.endswith("/token"):
+                try:
+                    token = Path(kp).read_text(errors='replace').strip()
+                    if token:
+                        INFO(f"ServiceAccount token length: {len(token)} bytes")
+                except Exception as e:
+                    WARN(f"Could not read token metadata from {kp}: {e}")
+        else:
+            PASS(f"Not present: {kp}")
+    if not found_k8s:
+        INFO("No Kubernetes service account files detected")
+
+    SUB("Generic mounted secrets and cloud credentials")
+    NOTE("Checks common secret mount points and cloud credential file locations.")
+    secret_globs = [
+        "/run/secrets/*",
+        "/var/run/secrets/*",
+        "/root/.aws/credentials",
+        "/root/.aws/config",
+        "/root/.config/gcloud/application_default_credentials.json",
+        "/root/.azure/accessTokens.json",
+        "/var/run/secrets/eks.amazonaws.com/serviceaccount/token",
+        "/var/run/secrets/azure/tokens/*",
+    ]
+    secret_hits = []
+    for pattern in secret_globs:
+        hits = glob.glob(pattern)
+        if hits:
+            for h in hits[:10]:
+                p = file_perms(h)
+                WARN(f"Secret/credential artifact present: {h}  ({p})")
+                secret_hits.append(h)
+            if len(hits) > 10:
+                INFO(f"{len(hits)-10} additional matches omitted for pattern: {pattern}")
+    if not secret_hits:
+        PASS("No common mounted secret or cloud credential files found")
+
+    SUB("Cloud metadata service reachability")
+    NOTE("If metadata endpoints are reachable, temporary cloud credentials may be harvestable.")
+    curl_path, rc = run("command -v curl 2>/dev/null", timeout=2, show_cmd=False)
+    if rc != 0 or not curl_path:
+        WARN("curl not available; skipping metadata HTTP checks")
+    else:
+        metadata_targets = [
+            ("AWS IMDSv2 token endpoint", "curl -sS -m 2 -o /dev/null -w '%{http_code}' -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token"),
+            ("AWS IMDSv1 root", "curl -sS -m 2 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/"),
+            ("GCP metadata", "curl -sS -m 2 -H 'Metadata-Flavor: Google' -o /dev/null -w '%{http_code}' http://169.254.169.254/computeMetadata/v1/"),
+            ("Azure metadata", "curl -sS -m 2 -H Metadata:true -o /dev/null -w '%{http_code}' 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'"),
+        ]
+        for label, cmd in metadata_targets:
+            code, _ = run(cmd, timeout=4)
+            code = code.strip()
+            if code and code.isdigit():
+                if code in {"200", "401", "403"}:
+                    WARN(f"{label} reachable (HTTP {code})")
+                elif code in {"000"}:
+                    PASS(f"{label} not reachable")
+                else:
+                    INFO(f"{label} responded with non-auth status HTTP {code}")
+            else:
+                PASS(f"{label} not reachable")
+
+    SUB("cgroup release_agent and notify_on_release checks")
+    NOTE("Misconfigured cgroup release_agent can be abused for host command execution.")
+    release_files = ["/sys/fs/cgroup/release_agent", "/sys/fs/cgroup/notify_on_release"]
+    for rf in release_files:
+        if os.path.exists(rf):
+            data = read_file(rf, max_bytes=512, label=rf)
+            stripped = data.strip()
+            if rf.endswith("release_agent") and stripped and stripped != "[not readable]":
+                RISK(f"cgroup release_agent configured: {stripped}")
+            elif rf.endswith("notify_on_release") and stripped == "1":
+                WARN("cgroup notify_on_release=1 (potentially abusable with writable cgroups)")
+            else:
+                PASS(f"cgroup control appears safe: {rf}={stripped!r}")
+        else:
+            PASS(f"Not present: {rf}")
+
+    SUB("Sensitive runtime files commonly harvested by attackers")
+    sensitive_files = [
+        "/root/.kube/config",
+        "/etc/kubernetes/kubelet.conf",
+        "/etc/kubernetes/admin.conf",
+        "/var/lib/kubelet/kubeconfig",
+    ]
+    for sf in sensitive_files:
+        if os.path.exists(sf):
+            p = file_perms(sf)
+            if os.access(sf, os.R_OK):
+                WARN(f"Sensitive orchestration credential readable: {sf}  ({p})")
+            else:
+                INFO(f"Sensitive file exists but is not readable: {sf}  ({p})")
+        else:
+            PASS(f"Not present: {sf}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # SUMMARY
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -1455,7 +1597,7 @@ def main():
         epilog="""Sections:
   1=Runtime  2=Identity  3=Capabilities  4=PrivEsc  5=Filesystem
   6=Kernel   7=Network   8=Egress/TLS    9=Environment  10=Credentials
-  11=Processes  12=Lateral  13=Tools
+  11=Processes  12=Lateral  13=Tools  14=Orchestration/Secrets
 
 Examples:
   python3 container_audit.py
@@ -1512,6 +1654,7 @@ Examples:
         section_processes,   # 11
         section_lateral,     # 12
         section_tools,       # 13
+        section_orchestration, # 14
     ]
 
     if args.sections:

@@ -1,0 +1,2988 @@
+
+  ████████████████████████████████████████████████████
+  ██      CONTAINER SECURITY AUDIT REPORT v2       ██
+  ████████████████████████████████████████████████████
+
+  Host    : cb92b62ee437
+  Date    : 2026-04-22 06:40:03.382134
+  User    : uid=0(root) gid=0(root) groups=0(root)
+  PID     : 11137
+  Script  : container_audit.py
+  Python  : 3.12.12
+  Output  : logs/audit_full_latest.log
+
+  Severity labels:
+    [0;31m[RISK][0m = confirmed attack surface — act on these
+    [0;33m[WARN][0m = notable — may be exploitable depending on context
+    [0;32m[PASS][0m = check ran, result is secure
+    [0;36m[INFO][0m = neutral, context for interpreting results
+    [0;35m[NOTE][0m = explanation of what the check means
+  ████████████████████████████████████████████████████
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  1. RUNTIME DETECTION                                          ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Goal: understand the isolation boundary around this process.
+  [0;35m[NOTE][0m  gVisor/runsc = userspace kernel; the synthetic uname version is not the real host kernel.
+  [0;35m[NOTE][0m  If hypervisor flag is set, escaping the container only reaches a VM — not bare metal.
+
+  ┌─ Operating system
+
+    $ cat /etc/os-release 2>/dev/null || cat /etc/issue 2>/dev/null
+    PRETTY_NAME="Ubuntu 24.04.3 LTS"
+    NAME="Ubuntu"
+    VERSION_ID="24.04"
+    VERSION="24.04.3 LTS (Noble Numbat)"
+    VERSION_CODENAME=noble
+    ID=ubuntu
+    ID_LIKE=debian
+    HOME_URL="https://www.ubuntu.com/"
+    SUPPORT_URL="https://help.ubuntu.com/"
+    BUG_REPORT_URL="https://bugs.launchpad.net/ubuntu/"
+    PRIVACY_POLICY_URL="https://www.ubuntu.com/legal/terms-and-policies/privacy-policy"
+    UBUNTU_CODENAME=noble
+    LOGO=ubuntu-logo
+
+    $ uname -a
+    Linux cb92b62ee437 6.12.47 #1 SMP Mon Oct 27 10:01:15 UTC 2025 x86_64 x86_64 x86_64 GNU/Linux
+
+    $ uname -m
+    x86_64
+
+  ┌─ Cgroup hierarchy — reveals runtime type
+  [0;35m[NOTE][0m  Path format: docker/<id> = Docker, kubepods/<id> = Kubernetes, bare hash or 'wiggle' = gVisor/ACI
+
+    $ cat /proc/1/cgroup
+    0::/
+  [0;36m[INFO][0m  Non-standard cgroup prefix — likely ACI, custom runtime, or gVisor
+
+  ┌─ Container indicator files
+  [0;35m[NOTE][0m  /.dockerenv is created by Docker in every container it starts.
+  [0;33m[WARN][0m  Found: /.dockerenv  (0755  uid=0  gid=0  size=0)
+  [0;32m[PASS][0m  Not present: /run/.containerenv
+  [0;32m[PASS][0m  Not present: /var/run/.containerenv
+
+  ┌─ Platform metadata: /container_info.json
+  [0;35m[NOTE][0m  Platform-injected file. Raw JSON shown in full, then each field annotated.
+
+    $ cat /container_info.json
+    [not found]
+  [0;36m[INFO][0m  Not present
+
+  ┌─ Hypervisor / VM detection
+  [0;35m[NOTE][0m  'hypervisor' flag in CPU flags = CPU knows it's virtualised (KVM, Hyper-V, VMware, etc.)
+  [0;35m[NOTE][0m  GOOD for security: even if the container is escaped, you land inside a VM, not on host hardware.
+
+    $ grep -m1 'flags' /proc/cpuinfo 2>/dev/null | head -c 300 || echo 'not readable'
+    flags		: fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ss ht syscall nx pdpe1gb rdtscp lm constant_tsc rep_good nopl xtopology nonstop_tsc cpuid tsc_known_freq pni pclmulqdq ssse3 fma cx16 pcid sse4_1 sse4_2 x2apic movbe popcnt tsc_deadline_timer a
+  [0;33m[WARN][0m  No hypervisor flag in CPU flags — may be bare metal, or virtualisation is hidden
+
+    $ ls /dev/vmbus* /dev/virtio* 2>/dev/null || echo 'none'
+    none
+
+    $ systemd-detect-virt 2>/dev/null || echo 'systemd-detect-virt: not available'
+    docker
+
+  ┌─ Namespace isolation: PID 1 vs self
+  [0;35m[NOTE][0m  Each namespace type in Linux isolates a resource class.
+  [0;35m[NOTE][0m    mnt = filesystems   net = network stack   pid = process IDs
+  [0;35m[NOTE][0m    ipc = shared memory   uts = hostname   user = uid/gid mapping
+  [0;35m[NOTE][0m  If this process shares a namespace inode with PID 1, that resource is NOT isolated.
+
+    $ readlink /proc/1/ns/*
+    /proc/1/ns/mnt    → mnt:[4026532177]
+    /proc/1/ns/net    → net:[4026531840]
+    /proc/1/ns/pid    → pid:[4026532176]
+    /proc/1/ns/ipc    → ipc:[4026532146]
+    /proc/1/ns/uts    → uts:[4026532147]
+    /proc/1/ns/user   → user:[4026531837]
+
+    $ readlink /proc/self/ns/*
+    /proc/self/ns/mnt    → mnt:[4026532177]
+    /proc/self/ns/net    → net:[4026531840]
+    /proc/self/ns/pid    → pid:[4026532176]
+    /proc/self/ns/ipc    → ipc:[4026532146]
+    /proc/self/ns/uts    → uts:[4026532147]
+    /proc/self/ns/user   → user:[4026531837]
+
+  [0;35m[NOTE][0m  Comparison — same inode = shared namespace = no isolation:
+  [0;33m[WARN][0m    mnt   : SHARED with PID1  (mnt:[4026532177])
+  [0;33m[WARN][0m    net   : SHARED with PID1  (net:[4026531840])
+  [0;33m[WARN][0m    pid   : SHARED with PID1  (pid:[4026532176])
+  [0;33m[WARN][0m    ipc   : SHARED with PID1  (ipc:[4026532146])
+  [0;33m[WARN][0m    uts   : SHARED with PID1  (uts:[4026532147])
+  [0;33m[WARN][0m    user  : SHARED with PID1  (user:[4026531837])
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  2. IDENTITY AND PRIVILEGE                                     ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ Current process identity
+  [0;35m[NOTE][0m  This is who the audit script runs as — and who any agent in this container runs as.
+
+    $ id
+    uid=0(root) gid=0(root) groups=0(root)
+
+    $ groups
+    root
+  [0;31m[RISK][0m  Running as root (uid=0): can read all files, write to any writable mount, exploit misconfigs
+
+  ┌─ PID 1 (container init) identity and command line
+  [0;35m[NOTE][0m  PID1 is the entrypoint/process manager. Its identity and command line show what this container does.
+  [0;35m[NOTE][0m  process_api is the Anthropic executor that receives and runs AI-generated code.
+
+    $ cat /proc/1/status
+    Name:	tail
+    Umask:	0022
+    State:	S (sleeping)
+    Tgid:	1
+    Ngid:	0
+    Pid:	1
+    PPid:	0
+    TracerPid:	0
+    Uid:	0	0	0	0
+    Gid:	0	0	0	0
+    FDSize:	64
+    Groups:	0 
+    NStgid:	1
+    NSpid:	1
+    NSpgid:	0
+    NSsid:	0
+    Kthread:	0
+    VmPeak:	    3156 kB
+    VmSize:	    3156 kB
+    VmLck:	       0 kB
+    VmPin:	       0 kB
+    VmHWM:	    1936 kB
+    VmRSS:	    1936 kB
+    RssAnon:	     120 kB
+    RssFile:	    1816 kB
+    RssShmem:	       0 kB
+    VmData:	     224 kB
+    VmStk:	     132 kB
+    VmExe:	      40 kB
+    VmLib:	    1748 kB
+    VmPTE:	      40 kB
+    VmSwap:	       0 kB
+    HugetlbPages:	       0 kB
+    CoreDumping:	0
+    THP_enabled:	0
+    untag_mask:	0xffffffffffffffff
+    Threads:	1
+    SigQ:	0/7896
+    SigPnd:	0000000000000000
+    ShdPnd:	0000000000000000
+    SigBlk:	0000000000000000
+    SigIgn:	0000000000000000
+    SigCgt:	0000000000000000
+    CapInh:	0000000000000000
+    CapPrm:	00000000a80425fb
+    CapEff:	00000000a80425fb
+    CapBnd:	00000000a80425fb
+    CapAmb:	0000000000000000
+    NoNewPrivs:	0
+    Seccomp:	0
+    Seccomp_filters:	0
+    Speculation_Store_Bypass:	vulnerable
+    SpeculationIndirectBranch:	always enabled
+    Cpus_allowed:	00000000,00000007
+    Cpus_allowed_list:	0-2
+    Mems_allowed:	00000000,00000001
+    Mems_allowed_list:	0
+    voluntary_ctxt_switches:	694
+    nonvoluntary_ctxt_switches:	14
+  [0;35m[NOTE][0m  Extracted key fields from /proc/1/status:
+      Name:	tail
+      Pid:	1
+      Uid:	0	0	0	0
+      Gid:	0	0	0	0
+      NoNewPrivs:	0
+      Seccomp:	0
+      Seccomp_filters:	0
+  [0;33m[WARN][0m  PID1 runs as root (uid=0)
+
+    $ cat /proc/1/cmdline | tr '\0' ' '
+    tail -f /dev/null
+  [0;35m[NOTE][0m  Parsed PID1 command line arguments:
+      tail
+      -f
+      /dev/null
+
+  ┌─ no_new_privileges flag
+  [0;35m[NOTE][0m  =1 means SUID/SGID binaries are neutered — the kernel ignores the setuid bit on exec.
+  [0;35m[NOTE][0m  =0 (or absent) means SUID binaries execute with their owner's privileges.
+  [0;35m[NOTE][0m  Set via prctl(PR_SET_NO_NEW_PRIVS,1) or Docker --security-opt no-new-privileges.
+
+    $ cat /proc/self/status
+    Name:	python3
+    Umask:	0022
+    State:	R (running)
+    Tgid:	11137
+    Ngid:	0
+    Pid:	11137
+    PPid:	11135
+    TracerPid:	0
+    Uid:	0	0	0	0
+    Gid:	0	0	0	0
+    FDSize:	256
+    Groups:	0 
+    NStgid:	11137
+    NSpid:	11137
+    NSpgid:	11135
+    NSsid:	11135
+    Kthread:	0
+    VmPeak:	   21768 kB
+    VmSize:	   21736 kB
+    VmLck:	       0 kB
+    VmPin:	       0 kB
+    VmHWM:	   18524 kB
+    VmRSS:	   18524 kB
+    RssAnon:	   10508 kB
+    RssFile:	    8016 kB
+    RssShmem:	       0 kB
+    VmData:	   11376 kB
+    VmStk:	     136 kB
+    VmExe:	       4 kB
+    VmLib:	    5504 kB
+    VmPTE:	      84 kB
+    VmSwap:	       0 kB
+    HugetlbPages:	       0 kB
+    CoreDumping:	0
+    THP_enabled:	0
+    untag_mask:	0xffffffffffffffff
+    Threads:	1
+    SigQ:	0/7896
+    SigPnd:	0000000000000000
+    ShdPnd:	0000000000000000
+    SigBlk:	0000000000000000
+    SigIgn:	0000000001001000
+    SigCgt:	0000000000000002
+    CapInh:	0000000000000000
+    CapPrm:	00000000a80425fb
+    CapEff:	00000000a80425fb
+    CapBnd:	00000000a80425fb
+    CapAmb:	0000000000000000
+    NoNewPrivs:	0
+    Seccomp:	0
+    Seccomp_filters:	0
+    Speculation_Store_Bypass:	vulnerable
+    SpeculationIndirectBranch:	always enabled
+    Cpus_allowed:	00000000,00000007
+    Cpus_allowed_list:	0-2
+    Mems_allowed:	00000000,00000001
+    Mems_allowed_list:	0
+    voluntary_ctxt_switches:	44
+    nonvoluntary_ctxt_switches:	3
+
+    NoNewPrivs value: '0'
+  [0;31m[RISK][0m  no_new_privileges=0 — SUID binaries can escalate to their owner's uid (usually root)
+
+  ┌─ Seccomp syscall filter
+  [0;35m[NOTE][0m  Restricts which of the ~400 Linux syscalls this process can invoke.
+  [0;35m[NOTE][0m    0 = disabled (all syscalls available)
+  [0;35m[NOTE][0m    1 = strict (only read/write/exit/sigreturn — breaks most programs)
+  [0;35m[NOTE][0m    2 = BPF filter (custom allow/deny list — Docker default blocks ~40 dangerous syscalls)
+
+    Seccomp value: '0'
+  [0;31m[RISK][0m  Seccomp=0 — all kernel syscalls available, no syscall-level containment
+
+  ┌─ /etc/passwd — full user database
+  [0;35m[NOTE][0m  Format: username:password:uid:gid:comment:home:shell
+  [0;35m[NOTE][0m  'x' in password field = hash is in /etc/shadow.  uid=0 = root-level access.
+
+    $ cat /etc/passwd
+    root:x:0:0:root:/root:/bin/bash
+    daemon:x:1:1:daemon:/usr/sbin:/usr/sbin/nologin
+    bin:x:2:2:bin:/bin:/usr/sbin/nologin
+    sys:x:3:3:sys:/dev:/usr/sbin/nologin
+    sync:x:4:65534:sync:/bin:/bin/sync
+    games:x:5:60:games:/usr/games:/usr/sbin/nologin
+    man:x:6:12:man:/var/cache/man:/usr/sbin/nologin
+    lp:x:7:7:lp:/var/spool/lpd:/usr/sbin/nologin
+    mail:x:8:8:mail:/var/mail:/usr/sbin/nologin
+    news:x:9:9:news:/var/spool/news:/usr/sbin/nologin
+    uucp:x:10:10:uucp:/var/spool/uucp:/usr/sbin/nologin
+    proxy:x:13:13:proxy:/bin:/usr/sbin/nologin
+    www-data:x:33:33:www-data:/var/www:/usr/sbin/nologin
+    backup:x:34:34:backup:/var/backups:/usr/sbin/nologin
+    list:x:38:38:Mailing List Manager:/var/list:/usr/sbin/nologin
+    irc:x:39:39:ircd:/run/ircd:/usr/sbin/nologin
+    _apt:x:42:65534::/nonexistent:/usr/sbin/nologin
+    nobody:x:65534:65534:nobody:/nonexistent:/usr/sbin/nologin
+    ubuntu:x:1000:1000:Ubuntu:/home/ubuntu:/bin/bash
+    systemd-network:x:998:998:systemd Network Management:/:/usr/sbin/nologin
+    messagebus:x:100:101::/nonexistent:/usr/sbin/nologin
+    polkitd:x:997:997:User for polkitd:/:/usr/sbin/nologin
+  [0;36m[INFO][0m  uid=0 entry: root:x:0:0:root:/root:/bin/bash
+
+  ┌─ /etc/shadow — password hashes
+  [0;35m[NOTE][0m  Readable shadow file = offline password cracking is possible.
+  [0;35m[NOTE][0m  Format: username:hash:last_changed:min:max:warn:inactive:expire:reserved
+  [0;35m[NOTE][0m  Hash prefixes: $1$=MD5  $2y$=bcrypt  $5$=SHA-256  $6$=SHA-512  $y$=yescrypt
+  [0;35m[NOTE][0m    * or ! in hash field = account locked / no password set (login disabled)
+  [0;35m[NOTE][0m    !! = password never set  (empty) = passwordless login (DANGEROUS)
+
+    $ cat /etc/shadow
+    root:*:20374:0:99999:7:::
+    daemon:*:20374:0:99999:7:::
+    bin:*:20374:0:99999:7:::
+    sys:*:20374:0:99999:7:::
+    sync:*:20374:0:99999:7:::
+    games:*:20374:0:99999:7:::
+    man:*:20374:0:99999:7:::
+    lp:*:20374:0:99999:7:::
+    mail:*:20374:0:99999:7:::
+    news:*:20374:0:99999:7:::
+    uucp:*:20374:0:99999:7:::
+    proxy:*:20374:0:99999:7:::
+    www-data:*:20374:0:99999:7:::
+    backup:*:20374:0:99999:7:::
+    list:*:20374:0:99999:7:::
+    irc:*:20374:0:99999:7:::
+    _apt:*:20374:0:99999:7:::
+    nobody:*:20374:0:99999:7:::
+    ubuntu:!:20374:0:99999:7:::
+    systemd-network:!*:20465::::::
+    messagebus:!:20465::::::
+    polkitd:!*:20465::::::
+
+  [0;35m[NOTE][0m  Per-entry analysis:
+      root                  hash=*    →  locked account, no password login
+      daemon                hash=*    →  locked account, no password login
+      bin                   hash=*    →  locked account, no password login
+      sys                   hash=*    →  locked account, no password login
+      sync                  hash=*    →  locked account, no password login
+      games                 hash=*    →  locked account, no password login
+      man                   hash=*    →  locked account, no password login
+      lp                    hash=*    →  locked account, no password login
+      mail                  hash=*    →  locked account, no password login
+      news                  hash=*    →  locked account, no password login
+      uucp                  hash=*    →  locked account, no password login
+      proxy                 hash=*    →  locked account, no password login
+      www-data              hash=*    →  locked account, no password login
+      backup                hash=*    →  locked account, no password login
+      list                  hash=*    →  locked account, no password login
+      irc                   hash=*    →  locked account, no password login
+      _apt                  hash=*    →  locked account, no password login
+      nobody                hash=*    →  locked account, no password login
+      ubuntu                hash='!'    →  account disabled / password never set
+      systemd-network       hash='!*'   →  account disabled / password never set
+      messagebus            hash='!'    →  account disabled / password never set
+      polkitd               hash='!*'   →  account disabled / password never set
+  [0;36m[INFO][0m  No crackable hashes found — all accounts locked or login-disabled
+
+  ┌─ /etc/group — group memberships
+
+    $ cat /etc/group
+    root:x:0:
+    daemon:x:1:
+    bin:x:2:
+    sys:x:3:
+    adm:x:4:ubuntu
+    tty:x:5:
+    disk:x:6:
+    lp:x:7:
+    mail:x:8:
+    news:x:9:
+    uucp:x:10:
+    man:x:12:
+    proxy:x:13:
+    kmem:x:15:
+    dialout:x:20:ubuntu
+    fax:x:21:
+    voice:x:22:
+    cdrom:x:24:ubuntu
+    floppy:x:25:ubuntu
+    tape:x:26:
+    sudo:x:27:ubuntu
+    audio:x:29:ubuntu
+    dip:x:30:ubuntu
+    www-data:x:33:
+    backup:x:34:
+    operator:x:37:
+    list:x:38:
+    irc:x:39:
+    src:x:40:
+    shadow:x:42:
+    utmp:x:43:
+    video:x:44:ubuntu
+    sasl:x:45:
+    plugdev:x:46:ubuntu
+    staff:x:50:
+    games:x:60:
+    users:x:100:
+    nogroup:x:65534:
+    ubuntu:x:1000:
+    systemd-journal:x:999:
+    systemd-network:x:998:
+    messagebus:x:101:
+    _ssh:x:102:
+    polkitd:x:997:
+
+  ┌─ Sudo configuration
+  [0;35m[NOTE][0m  NOPASSWD = passwordless root. sudo -l lists what the current user can run.
+
+    $ sudo -l 2>&1
+    Matching Defaults entries for root on cb92b62ee437:
+        env_reset, mail_badpass, secure_path=/usr/local/sbin\:/usr/local/bin\:/usr/sbin\:/usr/bin\:/sbin\:/bin\:/snap/bin, use_pty
+    
+    User root may run the following commands on cb92b62ee437:
+        (ALL : ALL) ALL
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  3. LINUX CAPABILITIES                                         ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Capabilities split root privileges into individual units.
+  [0;35m[NOTE][0m  CapEff = active right now.  CapBnd = ceiling (max reachable via escalation).
+  [0;35m[NOTE][0m  CapPrm = permitted set.  CapInh = inherited across exec.  CapAmb = ambient.
+
+  ┌─ Raw capability hex from /proc/self/status
+
+    $ cat /proc/self/status
+    Name:	python3
+    Umask:	0022
+    State:	R (running)
+    Tgid:	11137
+    Ngid:	0
+    Pid:	11137
+    PPid:	11135
+    TracerPid:	0
+    Uid:	0	0	0	0
+    Gid:	0	0	0	0
+    FDSize:	256
+    Groups:	0 
+    NStgid:	11137
+    NSpid:	11137
+    NSpgid:	11135
+    NSsid:	11135
+    Kthread:	0
+    VmPeak:	   21768 kB
+    VmSize:	   21736 kB
+    VmLck:	       0 kB
+    VmPin:	       0 kB
+    VmHWM:	   18552 kB
+    VmRSS:	   18552 kB
+    RssAnon:	   10536 kB
+    RssFile:	    8016 kB
+    RssShmem:	       0 kB
+    VmData:	   11376 kB
+    VmStk:	     136 kB
+    VmExe:	       4 kB
+    VmLib:	    5504 kB
+    VmPTE:	      84 kB
+    VmSwap:	       0 kB
+    HugetlbPages:	       0 kB
+    CoreDumping:	0
+    THP_enabled:	0
+    untag_mask:	0xffffffffffffffff
+    Threads:	1
+    SigQ:	0/7896
+    SigPnd:	0000000000000000
+    ShdPnd:	0000000000000000
+    SigBlk:	0000000000000000
+    SigIgn:	0000000001001000
+    SigCgt:	0000000000000002
+    CapInh:	0000000000000000
+    CapPrm:	00000000a80425fb
+    CapEff:	00000000a80425fb
+    CapBnd:	00000000a80425fb
+    CapAmb:	0000000000000000
+    NoNewPrivs:	0
+    Seccomp:	0
+    Seccomp_filters:	0
+    Speculation_Store_Bypass:	vulnerable
+    SpeculationIndirectBranch:	always enabled
+    Cpus_allowed:	00000000,00000007
+    Cpus_allowed_list:	0-2
+    Mems_allowed:	00000000,00000001
+    Mems_allowed_list:	0
+    voluntary_ctxt_switches:	47
+    nonvoluntary_ctxt_switches:	3
+
+    Raw hex values extracted:
+      CapEff: 00000000a80425fb
+      CapBnd: 00000000a80425fb
+      CapPrm: 00000000a80425fb
+      CapInh: 0000000000000000
+      CapAmb: 0000000000000000
+
+  ┌─ Decoded capability sets
+
+    [1mEFFECTIVE  — active right now[0m (raw hex: 00000000a80425fb)
+      bit  0: CAP_CHOWN
+      bit  1: CAP_DAC_OVERRIDE
+      bit  3: CAP_FOWNER
+      bit  4: CAP_FSETID
+      bit  5: CAP_KILL
+      bit  6: CAP_SETGID  *** DANGEROUS: setgid — become any group ***
+      bit  7: CAP_SETUID  *** DANGEROUS: setuid — become any user ***
+      bit  8: CAP_SETPCAP  *** DANGEROUS: setpcap — grant capabilities to other processes ***
+      bit 10: CAP_NET_BIND_SERVICE
+      bit 13: CAP_NET_RAW  *** DANGEROUS: raw sockets — packet injection and sniffing ***
+      bit 18: CAP_SYS_CHROOT  *** DANGEROUS: chroot — escape jail or create new filesystem root ***
+      bit 27: CAP_MKNOD
+      bit 29: CAP_AUDIT_WRITE
+      bit 31: CAP_SETFCAP
+
+    [1mBOUNDING   — ceiling; reachable via privilege escalation[0m (raw hex: 00000000a80425fb)
+      bit  0: CAP_CHOWN
+      bit  1: CAP_DAC_OVERRIDE
+      bit  3: CAP_FOWNER
+      bit  4: CAP_FSETID
+      bit  5: CAP_KILL
+      bit  6: CAP_SETGID  *** DANGEROUS: setgid — become any group ***
+      bit  7: CAP_SETUID  *** DANGEROUS: setuid — become any user ***
+      bit  8: CAP_SETPCAP  *** DANGEROUS: setpcap — grant capabilities to other processes ***
+      bit 10: CAP_NET_BIND_SERVICE
+      bit 13: CAP_NET_RAW  *** DANGEROUS: raw sockets — packet injection and sniffing ***
+      bit 18: CAP_SYS_CHROOT  *** DANGEROUS: chroot — escape jail or create new filesystem root ***
+      bit 27: CAP_MKNOD
+      bit 29: CAP_AUDIT_WRITE
+      bit 31: CAP_SETFCAP
+
+    [1mPERMITTED  — can be moved into effective set[0m (raw hex: 00000000a80425fb)
+      bit  0: CAP_CHOWN
+      bit  1: CAP_DAC_OVERRIDE
+      bit  3: CAP_FOWNER
+      bit  4: CAP_FSETID
+      bit  5: CAP_KILL
+      bit  6: CAP_SETGID  *** DANGEROUS: setgid — become any group ***
+      bit  7: CAP_SETUID  *** DANGEROUS: setuid — become any user ***
+      bit  8: CAP_SETPCAP  *** DANGEROUS: setpcap — grant capabilities to other processes ***
+      bit 10: CAP_NET_BIND_SERVICE
+      bit 13: CAP_NET_RAW  *** DANGEROUS: raw sockets — packet injection and sniffing ***
+      bit 18: CAP_SYS_CHROOT  *** DANGEROUS: chroot — escape jail or create new filesystem root ***
+      bit 27: CAP_MKNOD
+      bit 29: CAP_AUDIT_WRITE
+      bit 31: CAP_SETFCAP
+
+    [1mINHERITABLE — kept across execve()[0m (raw hex: 0000000000000000)
+      (none — empty set)
+
+    [1mAMBIENT    — retained across execve() as non-root[0m (raw hex: 0000000000000000)
+      (none — empty set)
+
+  [0;31m[RISK][0m  Dangerous cap ACTIVE: CAP_SETGID — setgid — become any group
+  [0;31m[RISK][0m  Dangerous cap ACTIVE: CAP_SETUID — setuid — become any user
+  [0;31m[RISK][0m  Dangerous cap ACTIVE: CAP_SETPCAP — setpcap — grant capabilities to other processes
+  [0;31m[RISK][0m  Dangerous cap ACTIVE: CAP_NET_RAW — raw sockets — packet injection and sniffing
+  [0;31m[RISK][0m  Dangerous cap ACTIVE: CAP_SYS_CHROOT — chroot — escape jail or create new filesystem root
+
+  ┌─ capsh --print (if available)
+
+    $ capsh --print 2>/dev/null || echo 'capsh not installed'
+    Current: cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap=ep
+    Bounding set =cap_chown,cap_dac_override,cap_fowner,cap_fsetid,cap_kill,cap_setgid,cap_setuid,cap_setpcap,cap_net_bind_service,cap_net_raw,cap_sys_chroot,cap_mknod,cap_audit_write,cap_setfcap
+    Ambient set =
+    Current IAB: !cap_dac_read_search,!cap_linux_immutable,!cap_net_broadcast,!cap_net_admin,!cap_ipc_lock,!cap_ipc_owner,!cap_sys_module,!cap_sys_rawio,!cap_sys_ptrace,!cap_sys_pacct,!cap_sys_admin,!cap_sys_boot,!cap_sys_nice,!cap_sys_resource,!cap_sys_time,!cap_sys_tty_config,!cap_lease,!cap_audit_control,!cap_mac_override,!cap_mac_admin,!cap_syslog,!cap_wake_alarm,!cap_block_suspend,!cap_audit_read,!cap_perfmon,!cap_bpf,!cap_checkpoint_restore
+    Securebits: 00/0x0/1'b0 (no-new-privs=0)
+     secure-noroot: no (unlocked)
+     secure-no-suid-fixup: no (unlocked)
+     secure-keep-caps: no (unlocked)
+     secure-no-ambient-raise: no (unlocked)
+    uid=0(root) euid=0(root)
+    gid=0(root)
+    groups=0(root)
+    Guessed mode: HYBRID (4)
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  4. PRIVILEGE ESCALATION SURFACE                               ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ SUID binaries — full listing with permissions
+  [0;35m[NOTE][0m  SUID bit = binary executes as its file owner (usually root), not the caller.
+  [0;35m[NOTE][0m  Permission string: '-rwsr-xr-x' — the 's' in owner-execute position = SUID.
+  [0;35m[NOTE][0m  With no_new_privs=1 these are neutralised. Without it, each is a potential escalation path.
+  [0;35m[NOTE][0m  Reference: https://gtfobins.github.io — check each binary here.
+
+    $ find /usr /bin /sbin /opt /home -xdev -perm -4000 -type f 2>/dev/null | sort
+    /usr/bin/chfn
+    /usr/bin/chsh
+    /usr/bin/gpasswd
+    /usr/bin/mount
+    /usr/bin/newgrp
+    /usr/bin/passwd
+    /usr/bin/su
+    /usr/bin/sudo
+    /usr/bin/umount
+    /usr/lib/dbus-1.0/dbus-daemon-launch-helper
+    /usr/lib/openssh/ssh-keysign
+    /usr/lib/polkit-1/polkit-agent-helper-1
+  [0;33m[WARN][0m  SUID: /usr/bin/chfn  perms=0o104755  owner_uid=0
+  [0;31m[RISK][0m  SUID known-GTFObins: /usr/bin/chsh  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/gpasswd  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/mount  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/newgrp  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/passwd  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/su  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/sudo  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/bin/umount  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/lib/dbus-1.0/dbus-daemon-launch-helper  perms=0o104754  owner_uid=0
+  [0;31m[RISK][0m  SUID known-GTFObins: /usr/lib/openssh/ssh-keysign  perms=0o104755  owner_uid=0
+  [0;33m[WARN][0m  SUID: /usr/lib/polkit-1/polkit-agent-helper-1  perms=0o104755  owner_uid=0
+
+  ┌─ SGID binaries — full listing
+  [0;35m[NOTE][0m  SGID = executes with the file's group — can grant access to group-restricted resources.
+
+    $ find /usr /bin /sbin /opt /home -xdev -perm -2000 -type f 2>/dev/null | sort || echo 'none'
+    /usr/bin/chage
+    /usr/bin/expiry
+    /usr/bin/ssh-agent
+    /usr/sbin/pam_extrausers_chkpwd
+    /usr/sbin/unix_chkpwd
+
+  ┌─ World-writable directories in system paths
+  [0;35m[NOTE][0m  World-writable dir in a script's working path → file swap / race condition attacks.
+
+    $ find /usr /bin /sbin /lib /lib64 /etc -xdev -type d -perm -0002 2>/dev/null | head -20 || echo 'none'
+    (no output)
+
+    $ find / -xdev -maxdepth 5 -type d -perm -0002 2>/dev/null | grep -vE '^/(proc|sys|tmp|dev|run)' | head -20 || echo 'none outside /tmp'
+    /var/tmp
+
+  ┌─ Writable PATH directories — contents shown for each
+  [0;35m[NOTE][0m  Writable PATH dir = plant a fake binary (e.g., 'python3', 'curl') that runs in its place.
+  [0;35m[NOTE][0m  We show ls -la of each writable dir so you can spot planted binaries now.
+
+    PATH=/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root/.pyenv/plugins/python-build/bin:/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/versions/3.12.12/bin
+
+    $ ls -la /root/.pyenv/versions/3.12.12/bin 2>/dev/null | head -30
+    total 34976
+    drwxr-xr-x 2 root root     4096 Jan 12 17:46 .
+    drwxr-xr-x 6 root root     4096 Jan 12 17:44 ..
+    lrwxrwxrwx 1 root root        9 Jan 12 17:44 2to3 -> 2to3-3.12
+    -rwxr-xr-x 1 root root      121 Jan 12 17:44 2to3-3.12
+    -rwxr-xr-x 1 root root      217 Jan 12 17:46 black
+    -rwxr-xr-x 1 root root      218 Jan 12 17:46 blackd
+    -rwxr-xr-x 1 root root      231 Jan 12 17:46 dmypy
+    lrwxrwxrwx 1 root root        8 Jan 12 17:44 idle -> idle3.12
+    lrwxrwxrwx 1 root root        8 Jan 12 17:44 idle3 -> idle3.12
+    -rwxr-xr-x 1 root root      119 Jan 12 17:44 idle3.12
+    -rwxr-xr-x 1 root root      206 Jan 12 17:46 isort
+    -rwxr-xr-x 1 root root      240 Jan 12 17:46 isort-identify-imports
+    -rwxr-xr-x 1 root root      227 Jan 12 17:46 mypy
+    -rwxr-xr-x 1 root root      210 Jan 12 17:46 mypyc
+    -rwxr-xr-x 1 root root      203 Jan 12 17:46 nodeenv
+    -rwxr-xr-x 1 root root      245 Jan 12 17:46 pip
+    -rwxr-xr-x 1 root root      245 Jan 12 17:46 pip3
+    -rwxr-xr-x 1 root root      245 Jan 12 17:46 pip3.12
+    -rwxr-xr-x 1 root root      218 Jan 12 17:46 py.test
+    lrwxrwxrwx 1 root root        9 Jan 12 17:44 pydoc -> pydoc3.12
+    lrwxrwxrwx 1 root root        9 Jan 12 17:44 pydoc3 -> pydoc3.12
+    -rwxr-xr-x 1 root root      104 Jan 12 17:44 pydoc3.12
+    -rwxr-xr-x 1 root root      212 Jan 12 17:46 pygmentize
+    -rwxr-xr-x 1 root root      219 Jan 12 17:46 pyright
+    -rwxr-xr-x 1 root root      226 Jan 12 17:46 pyright-langserver
+    -rwxr-xr-x 1 root root      219 Jan 12 17:46 pyright-python
+    -rwxr-xr-x 1 root root      226 Jan 12 17:46 pyright-python-langserver
+    -rwxr-xr-x 1 root root      218 Jan 12 17:46 pytest
+    lrwxrwxrwx 1 root root       10 Jan 12 17:44 python -> python3.12
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/libexec
+
+    $ ls -la /root/.pyenv/libexec 2>/dev/null | head -30
+    total 140
+    drwxr-xr-x  2 root root  4096 Jan 12 17:41 .
+    drwxr-xr-x 14 root root  4096 Jan 12 17:46 ..
+    -rwxr-xr-x  1 root root  3184 Jan 12 17:41 pyenv
+    -rwxr-xr-x  1 root root   633 Jan 12 17:41 pyenv---version
+    -rwxr-xr-x  1 root root   812 Jan 12 17:41 pyenv-commands
+    -rwxr-xr-x  1 root root   562 Jan 12 17:41 pyenv-completions
+    -rwxr-xr-x  1 root root  1182 Jan 12 17:41 pyenv-exec
+    -rwxr-xr-x  1 root root  1349 Jan 12 17:41 pyenv-global
+    -rwxr-xr-x  1 root root  3563 Jan 12 17:41 pyenv-help
+    -rwxr-xr-x  1 root root  1244 Jan 12 17:41 pyenv-hooks
+    -rwxr-xr-x  1 root root  6915 Jan 12 17:41 pyenv-init
+    -rwxr-xr-x  1 root root  3064 Jan 12 17:41 pyenv-latest
+    -rwxr-xr-x  1 root root  1947 Jan 12 17:41 pyenv-local
+    -rwxr-xr-x  1 root root  1789 Jan 12 17:41 pyenv-prefix
+    -rwxr-xr-x  1 root root 15848 Jan 12 17:41 pyenv-realpath.dylib
+    -rwxr-xr-x  1 root root  4775 Jan 12 17:41 pyenv-rehash
+    -rwxr-xr-x  1 root root   111 Jan 12 17:41 pyenv-root
+    -rwxr-xr-x  1 root root   444 Jan 12 17:41 pyenv-sh-rehash
+    -rwxr-xr-x  1 root root  2937 Jan 12 17:41 pyenv-sh-shell
+    -rwxr-xr-x  1 root root   380 Jan 12 17:41 pyenv-shims
+    -rwxr-xr-x  1 root root   785 Jan 12 17:41 pyenv-version
+    -rwxr-xr-x  1 root root   662 Jan 12 17:41 pyenv-version-file
+    -rwxr-xr-x  1 root root  1289 Jan 12 17:41 pyenv-version-file-read
+    -rwxr-xr-x  1 root root   851 Jan 12 17:41 pyenv-version-file-write
+    -rwxr-xr-x  1 root root  1862 Jan 12 17:41 pyenv-version-name
+    -rwxr-xr-x  1 root root   460 Jan 12 17:41 pyenv-version-origin
+    -rwxr-xr-x  1 root root  4293 Jan 12 17:41 pyenv-versions
+    -rwxr-xr-x  1 root root   769 Jan 12 17:41 pyenv-whence
+    -rwxr-xr-x  1 root root  2788 Jan 12 17:41 pyenv-which
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/plugins/python-build/bin
+
+    $ ls -la /root/.pyenv/plugins/python-build/bin 2>/dev/null | head -30
+    total 104
+    drwxr-xr-x 2 root root  4096 Jan 12 17:41 .
+    drwxr-xr-x 6 root root  4096 Jan 12 17:41 ..
+    -rwxr-xr-x 1 root root  8758 Jan 12 17:41 pyenv-install
+    -rwxr-xr-x 1 root root  1935 Jan 12 17:41 pyenv-uninstall
+    -rwxr-xr-x 1 root root 80637 Jan 12 17:41 python-build
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.phpenv/shims
+
+    $ ls -la /root/.phpenv/shims 2>/dev/null | head -30
+    total 40
+    drwxr-xr-x  2 root root 4096 Apr 22 06:39 .
+    drwxr-xr-x 11 root root 4096 Jan 12 18:02 ..
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phar
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phar.phar
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-cgi
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-config
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-fpm
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phpdbg
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phpize
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.cargo/bin
+
+    $ ls -la /root/.cargo/bin 2>/dev/null | head -30
+    total 20408
+    drwxr-xr-x 2 root root     4096 Jan 12 17:50 .
+    drwxr-xr-x 3 root root     4096 Jan 12 17:49 ..
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 cargo -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 cargo-clippy -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 cargo-fmt -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 cargo-miri -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 clippy-driver -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rls -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rust-analyzer -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rust-gdb -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rust-gdbgui -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rust-lldb -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rustc -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rustdoc -> rustup
+    lrwxrwxrwx 1 root root        6 Jan 12 17:49 rustfmt -> rustup
+    -rwxr-xr-x 1 root root 20889000 Jan 12 17:49 rustup
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.nvm/versions/node/v20.19.6/bin
+
+    $ ls -la /root/.nvm/versions/node/v20.19.6/bin 2>/dev/null | head -30
+    total 95376
+    drwxr-xr-x 2 1001 1001     4096 Jan 12 17:47 .
+    drwxr-xr-x 6 root root     4096 Jan 12 17:47 ..
+    lrwxrwxrwx 1 1001 1001       45 Nov 25 11:26 corepack -> ../lib/node_modules/corepack/dist/corepack.js
+    lrwxrwxrwx 1 root root       40 Jan 12 17:47 eslint -> ../lib/node_modules/eslint/bin/eslint.js
+    -rwxr-xr-x 1 1001 1001 97656584 Nov 25 11:26 node
+    lrwxrwxrwx 1 root root       38 Jan 12 17:47 npm -> ../lib/node_modules/npm/bin/npm-cli.js
+    lrwxrwxrwx 1 root root       38 Jan 12 17:47 npx -> ../lib/node_modules/npm/bin/npx-cli.js
+    lrwxrwxrwx 1 root root       41 Jan 12 17:47 pnpm -> ../lib/node_modules/corepack/dist/pnpm.js
+    lrwxrwxrwx 1 root root       41 Jan 12 17:47 pnpx -> ../lib/node_modules/corepack/dist/pnpx.js
+    lrwxrwxrwx 1 root root       45 Jan 12 17:47 prettier -> ../lib/node_modules/prettier/bin/prettier.cjs
+    lrwxrwxrwx 1 root root       38 Jan 12 17:47 tsc -> ../lib/node_modules/typescript/bin/tsc
+    lrwxrwxrwx 1 root root       43 Jan 12 17:47 tsserver -> ../lib/node_modules/typescript/bin/tsserver
+    lrwxrwxrwx 1 root root       41 Jan 12 17:47 yarn -> ../lib/node_modules/corepack/dist/yarn.js
+    lrwxrwxrwx 1 root root       44 Jan 12 17:47 yarnpkg -> ../lib/node_modules/corepack/dist/yarnpkg.js
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/shims
+
+    $ ls -la /root/.pyenv/shims 2>/dev/null | head -30
+    total 256
+    drwxr-xr-x  2 root root 4096 Apr 22 06:39 .
+    drwxr-xr-x 14 root root 4096 Jan 12 17:46 ..
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 2to3
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 2to3-3.10
+    -rwxr-xr-x  1 root root  168 Jan 12 17:43 2to3-3.11
+    -rwxr-xr-x  1 root root  168 Jan 12 17:44 2to3-3.12
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 black
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 blackd
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 dmypy
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 idle
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 idle3
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 idle3.10
+    -rwxr-xr-x  1 root root  168 Jan 12 17:43 idle3.11
+    -rwxr-xr-x  1 root root  168 Jan 12 17:44 idle3.12
+    -rwxr-xr-x  1 root root  168 Jan 12 17:45 idle3.13
+    -rwxr-xr-x  1 root root  168 Jan 12 17:46 idle3.14
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 isort
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 isort-identify-imports
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 mypy
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 mypyc
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 nodeenv
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 pip
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 pip3
+    -rwxr-xr-x  1 root root  168 Jan 12 17:42 pip3.10
+    -rwxr-xr-x  1 root root  168 Jan 12 17:43 pip3.11
+    -rwxr-xr-x  1 root root  168 Jan 12 17:44 pip3.12
+    -rwxr-xr-x  1 root root  168 Jan 12 17:45 pip3.13
+    -rwxr-xr-x  1 root root  168 Jan 12 17:46 pip3.14
+    -rwxr-xr-x  1 root root  168 Jan 12 17:51 py.test
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/bin
+
+    $ ls -la /root/.pyenv/bin 2>/dev/null | head -30
+    total 8
+    drwxr-xr-x  2 root root 4096 Jan 12 17:41 .
+    drwxr-xr-x 14 root root 4096 Jan 12 17:46 ..
+    lrwxrwxrwx  1 root root   16 Jan 12 17:41 pyenv -> ../libexec/pyenv
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/bun/1.2.14/bin
+
+    $ ls -la /root/.local/share/mise/installs/bun/1.2.14/bin 2>/dev/null | head -30
+    total 98512
+    drwxr-xr-x 2 root root      4096 Jan 12 17:47 .
+    drwxr-xr-x 3 root root      4096 Jan 12 17:47 ..
+    -rwxr-xr-x 1 root root 100866272 Jan 12 17:47 bun
+    lrwxrwxrwx 1 root root         5 Jan 12 17:47 bunx -> ./bun
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/erlang/27.1.2/bin
+
+    $ ls -la /root/.local/share/mise/installs/erlang/27.1.2/bin 2>/dev/null | head -30
+    total 1696
+    drwxr-xr-x 2 root root   4096 Jan 12 18:02 .
+    drwxr-xr-x 8 root root   4096 Jan 12 18:02 ..
+    -rwxr-xr-x 1 root root 118208 Oct 17  2024 ct_run
+    -rwxr-xr-x 1 root root 117296 Oct 17  2024 dialyzer
+    lrwxrwxrwx 1 root root     23 Jan 12 18:02 epmd -> ../erts-15.1.2/bin/epmd
+    -rwxr-xr-x 1 root root   1509 Jan 12 18:02 erl
+    -rwxr-xr-x 1 root root 503072 Oct 17  2024 erl_call
+    -rwxr-xr-x 1 root root 543368 Oct 17  2024 erlc
+    -rwxr-xr-x 1 root root 123280 Oct 17  2024 escript
+    -rw-r--r-- 1 root root   6876 Oct 17  2024 no_dot_erlang.boot
+    -rwxr-xr-x 1 root root  91704 Oct 17  2024 run_erl
+    -rwxr-xr-x 1 root root   1778 Jan 12 18:02 start
+    -rw-r--r-- 1 root root   6901 Oct 17  2024 start.boot
+    -rw-r--r-- 1 root root   8870 Oct 17  2024 start.script
+    -rw-r--r-- 1 root root   6901 Oct 17  2024 start_clean.boot
+    -rwxr-xr-x 1 root root   1244 Jan 12 18:02 start_erl
+    -rw-r--r-- 1 root root   7862 Oct 17  2024 start_sasl.boot
+    -rwxr-xr-x 1 root root  46488 Oct 17  2024 to_erl
+    -rwxr-xr-x 1 root root 112368 Oct 17  2024 typer
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/go/1.24.3/bin
+
+    $ ls -la /root/.local/share/mise/installs/go/1.24.3/bin 2>/dev/null | head -30
+    total 16852
+    drwxr-xr-x  2 root root     4096 Jan 12 17:51 .
+    drwxr-xr-x 10 root root     4096 Jan 12 17:51 ..
+    -rwxr-xr-x  1 root root 14323124 Apr 30  2025 go
+    -rwxr-xr-x  1 root root  2921864 Apr 30  2025 gofmt
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64
+
+    $ ls -la /root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64 2>/dev/null | head -30
+    total 36216
+    drwxr-xr-x 2 root root     4096 Jan 12 17:51 .
+    drwxr-xr-x 3 root root     4096 Jan 12 17:51 ..
+    -rw-r--r-- 1 root root    35148 May  4  2025 LICENSE
+    -rw-r--r-- 1 root root     3556 May  4  2025 README.md
+    -rwxr-xr-x 1 root root 37032120 May  4  2025 golangci-lint
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin
+
+    $ ls -la /root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin 2>/dev/null | head -30
+    total 24
+    drwxr-xr-x 2 root root 4096 Jan 12 17:48 .
+    drwxr-xr-x 5 root root 4096 Jan 12 17:48 ..
+    -rwxr-xr-x 1 root root 8817 Jan 12 17:48 gradle
+    -rwxr-xr-x 1 root root 3018 Jan 12 17:48 gradle.bat
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/java/21.0.2/bin
+
+    $ ls -la /root/.local/share/mise/installs/java/21.0.2/bin 2>/dev/null | head -30
+    total 472
+    drwxr-xr-x 2 root root  4096 Jan 12 17:47 .
+    drwxr-xr-x 8 root root  4096 Jan 12 17:47 ..
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jar
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jarsigner
+    -rwxr-xr-x 1 root root 12328 Jan  5  2024 java
+    -rwxr-xr-x 1 root root 12416 Jan  5  2024 javac
+    -rwxr-xr-x 1 root root 12424 Jan  5  2024 javadoc
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 javap
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jcmd
+    -rwxr-xr-x 1 root root 12456 Jan  5  2024 jconsole
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jdb
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jdeprscan
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jdeps
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jfr
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jhsdb
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jimage
+    -rwxr-xr-x 1 root root 12416 Jan  5  2024 jinfo
+    -rwxr-xr-x 1 root root 12416 Jan  5  2024 jlink
+    -rwxr-xr-x 1 root root 12416 Jan  5  2024 jmap
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jmod
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jpackage
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jps
+    -rwxr-xr-x 1 root root 12424 Jan  5  2024 jrunscript
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jshell
+    -rwxr-xr-x 1 root root 12424 Jan  5  2024 jstack
+    -rwxr-xr-x 1 root root 12384 Jan  5  2024 jstat
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jstatd
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 jwebserver
+    -rwxr-xr-x 1 root root 12392 Jan  5  2024 keytool
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin
+
+    $ ls -la /root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin 2>/dev/null | head -30
+    total 40
+    drwxr-xr-x 2 root root 4096 Jan 12 17:48 .
+    drwxr-xr-x 6 root root 4096 Jan 12 17:48 ..
+    -rw-r--r-- 1 root root  327 Jun  1  2025 m2.conf
+    -rwxr-xr-x 1 root root 6184 Jun  1  2025 mvn
+    -rw-r--r-- 1 root root 6778 Jun  1  2025 mvn.cmd
+    -rwxr-xr-x 1 root root 1684 Jun  1  2025 mvnDebug
+    -rw-r--r-- 1 root root 2169 Jun  1  2025 mvnDebug.cmd
+    -rwxr-xr-x 1 root root 1611 Jun  1  2025 mvnyjp
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/ruby/3.4.4/bin
+
+    $ ls -la /root/.local/share/mise/installs/ruby/3.4.4/bin 2>/dev/null | head -30
+    total 18420
+    drwxr-xr-x 2 root root     4096 Jan 12 17:51 .
+    drwxr-xr-x 8 root root     4096 Jan 12 17:51 ..
+    -r-xr-xr-x 1 root root      647 Dec 31 02:32 bootsnap
+    -r-xr-xr-x 1 root root      656 Dec 31 02:32 bundle
+    -r-xr-xr-x 1 root root      658 Dec 31 02:32 bundler
+    -r-xr-xr-x 1 root root      617 Dec 31 02:32 erb
+    -r-xr-xr-x 1 root root      347 Dec 31 02:32 gem
+    -r-xr-xr-x 1 root root      617 Dec 31 02:32 irb
+    -r-xr-xr-x 1 root root      623 Dec 31 02:32 racc
+    -r-xr-xr-x 1 root root      623 Dec 31 02:32 rake
+    -r-xr-xr-x 1 root root      617 Dec 31 02:32 rbs
+    -r-xr-xr-x 1 root root      627 Dec 31 02:32 rdbg
+    -r-xr-xr-x 1 root root      623 Dec 31 02:32 rdoc
+    -r-xr-xr-x 1 root root      619 Dec 31 02:32 ri
+    -r-xr-xr-x 1 root root 18795056 Dec 31 02:32 ruby
+    -r-xr-xr-x 1 root root      683 Dec 31 02:32 syntax_suggest
+    -r-xr-xr-x 1 root root      647 Dec 31 02:32 typeprof
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin
+
+    $ ls -la /root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin 2>/dev/null | head -30
+    total 52
+    drwxr-xr-x 2 root root 4096 Jan 12 18:02 .
+    drwxr-xr-x 5 root root 4096 Jan 12 18:02 ..
+    -rwxr-xr-x 1 root root 6657 Jan 12 18:02 elixir
+    -rw-r--r-- 1 root root 6573 Jan 12 18:02 elixir.bat
+    -rwxr-xr-x 1 root root 1339 Jan 12 18:02 elixirc
+    -rw-r--r-- 1 root root 1363 Jan 12 18:02 elixirc.bat
+    -rwxr-xr-x 1 root root  945 Jan 12 18:02 iex
+    -rw-r--r-- 1 root root  876 Jan 12 18:02 iex.bat
+    -rwxr-xr-x 1 root root   37 Jan 12 18:02 mix
+    -rw-r--r-- 1 root root   49 Jan 12 18:02 mix.bat
+    -rwxr-xr-x 1 root root  575 Jan 12 18:02 mix.ps1
+  [0;36m[INFO][0m    /root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts  — does not exist
+  [0;31m[RISK][0m  WRITABLE PATH dir: /opt/codex/tmp/arg0/codex-arg0k5AE7P
+
+    $ ls -la /opt/codex/tmp/arg0/codex-arg0k5AE7P 2>/dev/null | head -30
+    total 8
+    drwxr-xr-x 2 root root 4096 Apr 22 06:39 .
+    drwx------ 3 root root 4096 Apr 22 06:39 ..
+    -rw-r--r-- 1 root root    0 Apr 22 06:39 .lock
+    lrwxrwxrwx 1 root root   20 Apr 22 06:39 apply_patch -> /opt/codex/bin/codex
+    lrwxrwxrwx 1 root root   20 Apr 22 06:39 applypatch -> /opt/codex/bin/codex
+    lrwxrwxrwx 1 root root   20 Apr 22 06:39 codex-execve-wrapper -> /opt/codex/bin/codex
+    lrwxrwxrwx 1 root root   20 Apr 22 06:39 codex-linux-sandbox -> /opt/codex/bin/codex
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.phpenv/bin
+
+    $ ls -la /root/.phpenv/bin 2>/dev/null | head -30
+    total 12
+    drwxr-xr-x  2 root root 4096 Jan 12 17:51 .
+    drwxr-xr-x 11 root root 4096 Jan 12 18:02 ..
+    lrwxrwxrwx  1 root root   17 Jan 12 17:51 phpenv -> ../libexec/phpenv
+    -rwxr-xr-x  1 root root 2907 Jan 12 17:51 phpenv-install-all-darwin
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.phpenv/shims
+
+    $ ls -la /root/.phpenv/shims 2>/dev/null | head -30
+    total 40
+    drwxr-xr-x  2 root root 4096 Apr 22 06:39 .
+    drwxr-xr-x 11 root root 4096 Jan 12 18:02 ..
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phar
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phar.phar
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-cgi
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-config
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 php-fpm
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phpdbg
+    -rwxr-xr-x  8 root root  390 Jan 12 17:53 phpize
+  [0;36m[INFO][0m    /usr/local/go/bin  — does not exist
+  [0;36m[INFO][0m    /root/go/bin  — does not exist
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.swiftly/bin
+
+    $ ls -la /root/.swiftly/bin 2>/dev/null | head -30
+    total 71812
+    drwxr-xr-x 2 root root     4096 Jan 12 17:49 .
+    drwxr-xr-x 3 root root     4096 Jan 12 17:48 ..
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 aarch64-swift-linux-musl-clang++.cfg -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 aarch64-swift-linux-musl-clang.cfg -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang++ -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:49 clang-15 -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang-17 -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang-cache -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang-cl -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clang-cpp -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 clangd -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 docc -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 ld.lld -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 ld64.lld -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lld -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lld-link -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lldb -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lldb-argdumper -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lldb-dap -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 lldb-server -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-ar -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-cov -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-objcopy -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-objdump -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-profdata -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-ranlib -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 llvm-symbolizer -> /root/.swiftly/bin/swiftly
+    lrwxrwxrwx 1 root root       26 Jan 12 17:48 plutil -> /root/.swiftly/bin/swiftly
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.local/bin
+
+    $ ls -la /root/.local/bin 2>/dev/null | head -30
+    total 20
+    drwxr-xr-x 2 root root 4096 Jan 12 17:51 .
+    drwxr-xr-x 5 root root 4096 Jan 12 17:46 ..
+    lrwxrwxrwx 1 root root   59 Jan 12 17:51 clang-format -> /root/.local/share/pipx/venvs/clang-format/bin/clang-format
+    lrwxrwxrwx 1 root root   67 Jan 12 17:51 clang-format-diff.py -> /root/.local/share/pipx/venvs/clang-format/bin/clang-format-diff.py
+    lrwxrwxrwx 1 root root   55 Jan 12 17:51 clang-tidy -> /root/.local/share/pipx/venvs/clang-tidy/bin/clang-tidy
+    lrwxrwxrwx 1 root root   58 Jan 12 17:51 cmake-annotate -> /root/.local/share/pipx/venvs/cmakelang/bin/cmake-annotate
+    lrwxrwxrwx 1 root root   56 Jan 12 17:51 cmake-format -> /root/.local/share/pipx/venvs/cmakelang/bin/cmake-format
+    lrwxrwxrwx 1 root root   60 Jan 12 17:51 cmake-genparsers -> /root/.local/share/pipx/venvs/cmakelang/bin/cmake-genparsers
+    lrwxrwxrwx 1 root root   54 Jan 12 17:51 cmake-lint -> /root/.local/share/pipx/venvs/cmakelang/bin/cmake-lint
+    lrwxrwxrwx 1 root root   49 Jan 12 17:51 cpplint -> /root/.local/share/pipx/venvs/cpplint/bin/cpplint
+    lrwxrwxrwx 1 root root   52 Jan 12 17:51 ctest-to -> /root/.local/share/pipx/venvs/cmakelang/bin/ctest-to
+    lrwxrwxrwx 1 root root   63 Jan 12 17:51 git-clang-format -> /root/.local/share/pipx/venvs/clang-format/bin/git-clang-format
+    lrwxrwxrwx 1 root root   47 Jan 12 17:46 poetry -> /root/.local/share/pipx/venvs/poetry/bin/poetry
+    lrwxrwxrwx 1 root root   39 Jan 12 17:46 uv -> /root/.local/share/pipx/venvs/uv/bin/uv
+    lrwxrwxrwx 1 root root   40 Jan 12 17:46 uvx -> /root/.local/share/pipx/venvs/uv/bin/uvx
+  [0;31m[RISK][0m  WRITABLE PATH dir: /root/.pyenv/bin
+
+    $ ls -la /root/.pyenv/bin 2>/dev/null | head -30
+    total 8
+    drwxr-xr-x  2 root root 4096 Jan 12 17:41 .
+    drwxr-xr-x 14 root root 4096 Jan 12 17:46 ..
+    lrwxrwxrwx  1 root root   16 Jan 12 17:41 pyenv -> ../libexec/pyenv
+  [0;31m[RISK][0m  WRITABLE PATH dir: /usr/local/sbin
+
+    $ ls -la /usr/local/sbin 2>/dev/null | head -30
+    total 8
+    drwxr-xr-x  2 root root 4096 Oct 13  2025 .
+    drwxr-xr-x 10 root root 4096 Oct 13  2025 ..
+  [0;31m[RISK][0m  WRITABLE PATH dir: /usr/local/bin
+
+    $ ls -la /usr/local/bin 2>/dev/null | head -30
+    total 65496
+    drwxr-xr-x  2 root   root       4096 Mar 16 23:15 .
+    drwxr-xr-x 10 root   root       4096 Oct 13  2025 ..
+    -rw-rw-r--  1 ubuntu ubuntu   512602 Feb 18 21:30 NOTICE.txt
+    -rwxr-xr-x  1 root   root    1016384 Mar 16 23:12 apply_patch
+    -rwxrwxr-x  1 ubuntu ubuntu 56248840 Feb 18 21:30 azcopy
+    lrwxrwxrwx  1 root   root         23 Jan 12 17:51 bazel -> /usr/local/bin/bazelisk
+    -rwxr-xr-x  1 root   root    5984408 Jan 12 17:51 bazelisk
+    -rwxr-xr-x  1 root   root    3283968 Jan 12 18:02 composer
+  [0;31m[RISK][0m  WRITABLE PATH dir: /usr/sbin
+
+    $ ls -la /usr/sbin 2>/dev/null | head -30
+    total 6476
+    drwxr-xr-x  2 root root      4096 Jan 12 17:41 .
+    drwxr-xr-x 13 root root      4096 Jan 12 17:41 ..
+    -rwxr-xr-x  1 root root      1053 Mar 31  2024 add-shell
+    -rwxr-xr-x  1 root root      3075 Jan  5 22:01 addgnupghome
+    lrwxrwxrwx  1 root root         7 Jul  5  2023 addgroup -> adduser
+    -rwxr-xr-x  1 root root     55191 Jul  5  2023 adduser
+    -rwxr-xr-x  1 root root     60992 Sep 16  2025 agetty
+    -rwxr-xr-x  1 root root      2217 Jan  5 22:01 applygnupgdefaults
+    -rwxr-xr-x  1 root root     35144 Apr 28  2024 badblocks
+    -rwxr-xr-x  1 root root     22912 Sep 16  2025 blkdiscard
+    -rwxr-xr-x  1 root root     55720 Sep 16  2025 blkid
+    -rwxr-xr-x  1 root root     35200 Sep 16  2025 blkzone
+    -rwxr-xr-x  1 root root     35200 Sep 16  2025 blockdev
+    -rwxr-xr-x  1 root root     58456 Feb 20  2025 capsh
+    -rwxr-xr-x  1 root root     31104 Sep 16  2025 chcpu
+    -rwxr-xr-x  1 root root     59720 May 30  2024 chgpasswd
+    -rwxr-xr-x  1 root root     35200 Sep 16  2025 chmem
+    -rwxr-xr-x  1 root root     55736 May 30  2024 chpasswd
+    -rwxr-xr-x  1 root root     39432 Jun 22  2025 chroot
+    lrwxrwxrwx  1 root root         4 May 30  2024 cpgr -> cppw
+    -rwxr-xr-x  1 root root     49608 May 30  2024 cppw
+    -rwxr-xr-x  1 root root     14720 Sep 16  2025 ctrlaltdel
+    -rwxr-xr-x  1 root root    231288 Apr 28  2024 debugfs
+    lrwxrwxrwx  1 root root         7 Jul  5  2023 delgroup -> deluser
+    -rwxr-xr-x  1 root root     18977 Jul  5  2023 deluser
+    -rwxr-xr-x  1 root root      4356 Apr 12  2024 dpkg-preconfigure
+    -rwxr-xr-x  1 root root      4536 Apr 12  2024 dpkg-reconfigure
+    -rwxr-xr-x  1 root root     35136 Apr 28  2024 dumpe2fs
+    -rwxr-xr-x  1 root root     18744 Apr 28  2024 e2freefrag
+  [0;31m[RISK][0m  WRITABLE PATH dir: /usr/bin
+
+    $ ls -la /usr/bin 2>/dev/null | head -30
+    total 232644
+    drwxr-xr-x  2 root root      32768 Jan 12 17:51 .
+    drwxr-xr-x 13 root root       4096 Jan 12 17:41 ..
+    lrwxrwxrwx  1 root root         28 Aug  4  2025 FileCheck-20 -> ../lib/llvm-20/bin/FileCheck
+    lrwxrwxrwx  1 root root         46 Aug  4  2025 UnicodeNameMappingGenerator-20 -> ../lib/llvm-20/bin/UnicodeNameMappingGenerator
+    lrwxrwxrwx  1 root root          1 Apr  8  2024 X11 -> .
+    -rwxr-xr-x  1 root root      55744 Jun 22  2025 [
+    -rwxr-xr-x  1 root root       4934 Aug  3  2024 activate-global-python-argcomplete
+    -rwxr-xr-x  1 root root      16422 Jul  2  2025 add-apt-repository
+    -rwxr-xr-x  1 root root      14720 Sep 16  2025 addpart
+    lrwxrwxrwx  1 root root         26 Dec  3 15:01 addr2line -> x86_64-linux-gnu-addr2line
+    lrwxrwxrwx  1 root root         30 Aug  4  2025 amdgpu-arch-20 -> ../lib/llvm-20/bin/amdgpu-arch
+    lrwxrwxrwx  1 root root         32 Aug  4  2025 analyze-build-20 -> ../lib/llvm-20/bin/analyze-build
+    -rwxr-xr-x  1 root root      18824 Oct 22  2024 apt
+    lrwxrwxrwx  1 root root         18 Jul  2  2025 apt-add-repository -> add-apt-repository
+    -rwxr-xr-x  1 root root      88544 Oct 22  2024 apt-cache
+    -rwxr-xr-x  1 root root      27104 Oct 22  2024 apt-cdrom
+    -rwxr-xr-x  1 root root      31120 Oct 22  2024 apt-config
+    -rwxr-xr-x  1 root root      51680 Oct 22  2024 apt-get
+    -rwxr-xr-x  1 root root      28664 Oct 22  2024 apt-key
+    -rwxr-xr-x  1 root root      55776 Oct 22  2024 apt-mark
+    lrwxrwxrwx  1 root root         19 Dec  3 15:01 ar -> x86_64-linux-gnu-ar
+    -rwxr-xr-x  1 root root      35336 Jun 22  2025 arch
+    lrwxrwxrwx  1 root root         19 Dec  3 15:01 as -> x86_64-linux-gnu-as
+    -rwxr-xr-x  1 root root      42997 Aug  4  2025 asan_symbolize-20
+    -rwxr-xr-x  1 root root      15204 Jan 14  2023 autoconf
+    -rwxr-xr-x  1 root root       9034 Jan 14  2023 autoheader
+    -rwxr-xr-x  1 root root      33475 Jan 14  2023 autom4te
+    -rwxr-xr-x  1 root root      26934 Jan 14  2023 autoreconf
+    -rwxr-xr-x  1 root root      17177 Jan 14  2023 autoscan
+  [0;31m[RISK][0m  WRITABLE PATH dir: /sbin
+
+    $ ls -la /sbin 2>/dev/null | head -30
+    lrwxrwxrwx 1 root root 8 Apr 22  2024 /sbin -> usr/sbin
+  [0;31m[RISK][0m  WRITABLE PATH dir: /bin
+
+    $ ls -la /bin 2>/dev/null | head -30
+    lrwxrwxrwx 1 root root 7 Apr 22  2024 /bin -> usr/bin
+
+  ┌─ Writable cron scripts — listing AND file contents
+  [0;35m[NOTE][0m  Writable cron file = arbitrary code executes at next interval as cron's user (often root).
+  [0;35m[NOTE][0m  We print each writable script's CONTENTS so you can see if it is already modified.
+
+    $ ls -la /etc/cron.d
+    total 12
+    drwxr-xr-x  2 root root 4096 Oct 13  2025 .
+    drwxr-xr-x 58 root root 4096 Apr 22 06:30 ..
+    -rw-r--r--  1 root root  201 Apr  8  2024 e2scrub_all
+  [0;31m[RISK][0m  WRITABLE cron script: /etc/cron.d/e2scrub_all
+  [0;35m[NOTE][0m  Contents of /etc/cron.d/e2scrub_all:
+
+    $ cat /etc/cron.d/e2scrub_all
+    30 3 * * 0 root test -e /run/systemd/system || SERVICE_MODE=1 /usr/lib/x86_64-linux-gnu/e2fsprogs/e2scrub_all_cron
+    10 3 * * * root test -e /run/systemd/system || SERVICE_MODE=1 /sbin/e2scrub_all -A -r
+
+    $ ls -la /etc/cron.daily
+    total 16
+    drwxr-xr-x  2 root root 4096 Oct 13  2025 .
+    drwxr-xr-x 58 root root 4096 Apr 22 06:30 ..
+    -rwxr-xr-x  1 root root 1478 Mar 22  2024 apt-compat
+    -rwxr-xr-x  1 root root  123 Feb  5  2024 dpkg
+  [0;31m[RISK][0m  WRITABLE cron script: /etc/cron.daily/apt-compat
+  [0;35m[NOTE][0m  Contents of /etc/cron.daily/apt-compat:
+
+    $ cat /etc/cron.daily/apt-compat
+    #!/bin/sh
+    
+    set -e
+    
+    # Systemd systems use a systemd timer unit which is preferable to
+    # run. We want to randomize the apt update and unattended-upgrade
+    # runs as much as possible to avoid hitting the mirrors all at the
+    # same time. The systemd time is better at this than the fixed
+    # cron.daily time
+    if [ -d /run/systemd/system ]; then
+        exit 0
+    fi
+    
+    check_power()
+    {
+        # laptop check, on_ac_power returns:
+        #       0 (true)    System is on main power
+        #       1 (false)   System is not on main power
+        #       255 (false) Power status could not be determined
+        # Desktop systems always return 255 it seems
+        if command -v on_ac_power >/dev/null; then
+            if on_ac_power; then
+                :
+            elif [ $? -eq 1 ]; then
+                return 1
+            fi
+        fi
+        return 0
+    }
+    
+    # sleep for a random interval of time (default 30min)
+    # (some code taken from cron-apt, thanks)
+    random_sleep()
+    {
+        RandomSleep=1800
+        eval $(apt-config shell RandomSleep APT::Periodic::RandomSleep)
+        if [ $RandomSleep -eq 0 ]; then
+    	return
+        fi
+        if [ -z "$RANDOM" ] ; then
+            # A fix for shells that do not have this bash feature.
+    	RANDOM=$(( $(dd if=/dev/urandom bs=2 count=1 2> /dev/null | cksum | cut -d' ' -f1) % 32767 ))
+        fi
+        TIME=$(($RANDOM % $RandomSleep))
+        sleep $TIME
+    }
+    
+    # delay the job execution by a random amount of time
+    random_sleep
+    
+    # ensure we don't do this on battery
+    check_power || exit 0
+    
+    # run daily job
+    exec /usr/lib/apt/apt.systemd.daily
+  [0;31m[RISK][0m  WRITABLE cron script: /etc/cron.daily/dpkg
+  [0;35m[NOTE][0m  Contents of /etc/cron.daily/dpkg:
+
+    $ cat /etc/cron.daily/dpkg
+    #!/bin/sh
+    
+    # Skip if systemd is running.
+    if [ -d /run/systemd/system ]; then
+      exit 0
+    fi
+    
+    /usr/libexec/dpkg/dpkg-db-backup
+
+    $ cat /etc/crontab
+    absent
+
+    $ crontab -l 2>/dev/null || echo '(no crontab for current user)'
+    (no crontab for current user)
+
+  ┌─ Library injection vectors
+  [0;35m[NOTE][0m  LD_PRELOAD / LD_LIBRARY_PATH inject a custom shared library loaded before all others.
+  [0;35m[NOTE][0m  A malicious preloaded library can intercept any libc function call in any subsequent process.
+
+    $ echo "LD_PRELOAD=${LD_PRELOAD:-(not set)}"
+    LD_PRELOAD=(not set)
+
+    $ echo "LD_LIBRARY_PATH=${LD_LIBRARY_PATH:-(not set)}"
+    LD_LIBRARY_PATH=(not set)
+  [0;35m[NOTE][0m  Contents of /etc/ld.so.preload (system-wide preload list):
+
+    $ cat /etc/ld.so.preload
+    [not found]
+
+  ┌─ Writable /etc/passwd, /etc/shadow, /etc/sudoers
+  [0;35m[NOTE][0m  Writing to /etc/passwd = add a root-uid account with no password.
+  [0;35m[NOTE][0m  Writing to /etc/sudoers = grant passwordless sudo to any user.
+  [0;31m[RISK][0m  WRITABLE: /etc/passwd  (0644  uid=0  gid=0  size=1069)
+  [0;31m[RISK][0m  WRITABLE: /etc/shadow  (0640  uid=0  gid=42  size=581)
+  [0;31m[RISK][0m  WRITABLE: /etc/sudoers  (0440  uid=0  gid=0  size=1800)
+  [0;31m[RISK][0m  WRITABLE: /etc/sudoers.d  (0755  uid=0  gid=0  size=4096)
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  5. FILESYSTEM AND MOUNTS                                      ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Mount propagation 'shared' = writes propagate to the host. 'slave' = receives from host.
+  [0;35m[NOTE][0m  9p = Plan 9 filesystem (gVisor uses this to expose host directories).
+
+  ┌─ Full mount table (/proc/mounts)
+  [0;35m[NOTE][0m  Fields: device  mountpoint  fstype  options  dump  pass
+
+    $ cat /proc/mounts
+    /dev/vda / ext4 rw,relatime,stripe=128 0 0
+    proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+    tmpfs /dev tmpfs rw,nosuid,size=65536k,nr_inodes=253083,mode=755 0 0
+    devpts /dev/pts devpts rw,nosuid,noexec,relatime,gid=5,mode=620,ptmxmode=666 0 0
+    sysfs /sys sysfs ro,nosuid,nodev,noexec,relatime 0 0
+    cgroup2 /sys/fs/cgroup cgroup2 ro,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot 0 0
+    mqueue /dev/mqueue mqueue rw,nosuid,nodev,noexec,relatime 0 0
+    shm /dev/shm tmpfs rw,relatime,size=1012332k,nr_inodes=253083 0 0
+    kataShared /etc/resolv.conf virtiofs rw,relatime 0 0
+    kataShared /etc/hostname virtiofs rw,relatime 0 0
+    kataShared /etc/hosts virtiofs rw,relatime 0 0
+    tmpfs /proc/interrupts tmpfs rw,nosuid,size=65536k,nr_inodes=253083,mode=755 0 0
+    tmpfs /proc/keys tmpfs rw,nosuid,size=65536k,nr_inodes=253083,mode=755 0 0
+    tmpfs /proc/timer_list tmpfs rw,nosuid,size=65536k,nr_inodes=253083,mode=755 0 0
+    proc /proc/bus proc ro,relatime 0 0
+    proc /proc/fs proc ro,relatime 0 0
+    proc /proc/irq proc ro,relatime 0 0
+    proc /proc/sys proc ro,relatime 0 0
+
+  ┌─ /proc/self/mountinfo — propagation details
+  [0;35m[NOTE][0m  'shared:N' tag = mount events propagate outward to host. This is the key exfil indicator.
+  [0;35m[NOTE][0m  'master:N' = slave mount — receives events from the host mount group N.
+
+    $ cat /proc/self/mountinfo
+    108 54 254:0 / / rw,relatime master:54 - ext4 /dev/vda rw,stripe=128
+    109 108 0:35 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+    110 108 0:36 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,nr_inodes=253083,mode=755
+    111 110 0:37 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620,ptmxmode=666
+    112 108 0:20 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs rw
+    113 112 0:25 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup2 rw,nsdelegate,memory_recursiveprot
+    114 110 0:32 / /dev/mqueue rw,nosuid,nodev,noexec,relatime - mqueue mqueue rw
+    115 110 0:34 / /dev/shm rw,relatime master:51 - tmpfs shm rw,size=1012332k,nr_inodes=253083
+    116 108 0:33 /cb92b62ee43701d7a8bc8fe6d30e7a2d04e929ac70627de8d18fc7fbe9f39c66-17978230fecc584d-resolv.conf /etc/resolv.conf rw,relatime - virtiofs kataShared rw
+    117 108 0:33 /cb92b62ee43701d7a8bc8fe6d30e7a2d04e929ac70627de8d18fc7fbe9f39c66-77a0d712a53f7a54-hostname /etc/hostname rw,relatime - virtiofs kataShared rw
+    118 108 0:33 /cb92b62ee43701d7a8bc8fe6d30e7a2d04e929ac70627de8d18fc7fbe9f39c66-2ad2c3a35963c6b8-hosts /etc/hosts rw,relatime - virtiofs kataShared rw
+    55 109 0:36 /null /proc/interrupts rw,nosuid - tmpfs tmpfs rw,size=65536k,nr_inodes=253083,mode=755
+    56 109 0:36 /null /proc/keys rw,nosuid - tmpfs tmpfs rw,size=65536k,nr_inodes=253083,mode=755
+    85 109 0:36 /null /proc/timer_list rw,nosuid - tmpfs tmpfs rw,size=65536k,nr_inodes=253083,mode=755
+    86 109 0:35 /bus /proc/bus ro,relatime - proc proc rw
+    87 109 0:35 /fs /proc/fs ro,relatime - proc proc rw
+    88 109 0:35 /irq /proc/irq ro,relatime - proc proc rw
+    89 109 0:35 /sys /proc/sys ro,relatime - proc proc rw
+  [0;33m[WARN][0m  Slave mount at: /
+      full line: 108 54 254:0 / / rw,relatime master:54 - ext4 /dev/vda rw,stripe=128
+  [0;33m[WARN][0m  Slave mount at: /dev/shm
+      full line: 115 110 0:34 / /dev/shm rw,relatime master:51 - tmpfs shm rw,size=1012332k,nr_inodes=253083
+
+  ┌─ /etc/hosts — full contents + writability
+  [0;35m[NOTE][0m  Writable /etc/hosts = reroute internal hostnames to attacker-controlled addresses.
+
+    $ cat /etc/hosts
+    127.0.0.1	localhost
+    ::1	localhost ip6-localhost ip6-loopback
+    fe00::	ip6-localnet
+    ff00::	ip6-mcastprefix
+    ff02::1	ip6-allnodes
+    ff02::2	ip6-allrouters
+    172.30.4.194	cb92b62ee437 main
+    172.30.4.195	4655a36d2d5f proxy
+    172.30.4.196	698418051d7d browser
+  [0;31m[RISK][0m  /etc/hosts is WRITABLE — DNS spoofing inside this container is possible
+
+  ┌─ /etc/resolv.conf — DNS server configuration
+  [0;35m[NOTE][0m  Which DNS server answers queries. Container-controlled DNS can redirect any domain lookup.
+
+    $ cat /etc/resolv.conf
+    nameserver 172.30.4.195
+
+  ┌─ Critical path writability
+  [0;35m[NOTE][0m  Writable system dirs allow binary/library replacement and config tampering.
+  [0;33m[WARN][0m  Writable: /  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /etc  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /usr  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /usr/bin  (0755  uid=0  gid=0  size=32768)
+  [0;33m[WARN][0m  Writable: /usr/sbin  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /bin  (0755  uid=0  gid=0  size=32768)
+  [0;33m[WARN][0m  Writable: /sbin  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /lib  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /lib64  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /usr/lib  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /tmp  (1777  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /var/tmp  (1777  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /mnt  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /home  (0755  uid=0  gid=0  size=4096)
+  [0;33m[WARN][0m  Writable: /root  (0700  uid=0  gid=0  size=4096)
+
+  ┌─ World-writable files in /etc and /usr
+  [0;35m[NOTE][0m  World-writable files in system paths can be replaced by any user.
+
+    $ find /etc /usr -xdev -type f -perm -0002 2>/dev/null | head -30 || echo 'none'
+    (no output)
+
+  ┌─ Unusual or large files in /tmp and home dirs
+  [0;35m[NOTE][0m  Dropped tools/payloads often land in /tmp, /var/tmp, or home directories.
+
+    $ find /tmp /var/tmp /home /root -xdev -type f -size +50k 2>/dev/null | xargs ls -lah 2>/dev/null | sort -k5 -h -r | head -20 || echo 'none'
+    -rwxr-xr-x 1 root root  224M Dec 11 02:59 /root/.local/share/swiftly/toolchains/6.2.3/usr/bin/sourcekit-lsp
+    -rwxr-xr-x 1 root root  224M Dec 11 01:56 /root/.local/share/swiftly/toolchains/6.2.3/usr/bin/swift-package
+    -rw-r--r-- 1 root root  219M Jun  5  2024 /root/.local/share/swiftly/toolchains/5.10.1/usr/lib/liblldb.so.15.0.0git
+    -rw-r--r-- 1 root root  213M Jun  5  2024 /root/.local/share/swiftly/toolchains/5.10.1/usr/lib/libsourcekitdInProc.so
+    -rwxr-xr-x 1 root root  211M Jun  5  2024 /root/.local/share/swiftly/toolchains/5.10.1/usr/bin/swift-frontend
+    -rw-r--r-- 1 root root  205M Dec 11 01:03 /root/.local/share/swiftly/toolchains/6.2.3/usr/lib/liblldb.so.17.0.0
+    -rw-r--r-- 1 root root  201M Jun  5  2024 /root/.local/share/swiftly/toolchains/5.10.1/usr/lib/swift/host/lib_InternalSwiftScan.so
+    -rw-r--r-- 1 root root  198M Dec 11 00:54 /root/.local/share/swiftly/toolchains/6.2.3/usr/lib/libsourcekitdInProc.so
+    -rwxr-xr-x 1 root root  196M Dec 11 00:54 /root/.local/share/swiftly/toolchains/6.2.3/usr/bin/swift-frontend
+    -rw-r--r-- 1 root root  196M Sep  3  2025 /root/.local/share/swiftly/toolchains/6.1.3/usr/lib/liblldb.so.17.0.0
+    -rw-r--r-- 1 root root  189M Sep  3  2025 /root/.local/share/swiftly/toolchains/6.1.3/usr/lib/libsourcekitdInProc.so
+    -rwxr-xr-x 1 root root  188M Sep  3  2025 /root/.local/share/swiftly/toolchains/6.1.3/usr/bin/swift-frontend
+    -rw-r--r-- 1 root root  186M Dec 11 00:54 /root/.local/share/swiftly/toolchains/6.2.3/usr/lib/swift/host/compiler/lib_InternalSwiftScan.so
+    -rwxr-xr-x 1 root root  184M Sep  3  2025 /root/.local/share/swiftly/toolchains/6.1.3/usr/bin/sourcekit-lsp
+    -rw-r--r-- 1 root root  179M Jan 12 17:49 /root/.rustup/toolchains/1.91.1-x86_64-unknown-linux-gnu/lib/libLLVM.so.21.1-rust-1.91.1-stable
+    -rw-r--r-- 1 root root  178M Jan 12 17:50 /root/.rustup/toolchains/1.87.0-x86_64-unknown-linux-gnu/lib/libLLVM.so.20.1-rust-1.87.0-stable
+    -rw-r--r-- 1 root root  178M Jan 12 17:49 /root/.rustup/toolchains/1.92.0-x86_64-unknown-linux-gnu/lib/libLLVM.so.21.1-rust-1.92.0-stable
+    -rw-r--r-- 1 root root  178M Jan 12 17:49 /root/.rustup/toolchains/1.90.0-x86_64-unknown-linux-gnu/lib/libLLVM.so.20.1-rust-1.90.0-stable
+    -rw-r--r-- 1 root root  178M Jan 12 17:49 /root/.rustup/toolchains/1.89.0-x86_64-unknown-linux-gnu/lib/libLLVM.so.20.1-rust-1.89.0-stable
+    -rw-r--r-- 1 root root  178M Jan 12 17:49 /root/.rustup/toolchains/1.88.0-x86_64-unknown-linux-gnu/lib/libLLVM.so.20.1-rust-1.88.0-stable
+
+  ┌─ Recent filesystem changes (past 24h) outside /proc /sys /tmp
+
+    $ find / -xdev -maxdepth 6 -newer /proc/1 -not -path '/proc/*' -not -path '/sys/*' -not -path '/tmp/*' -type f 2>/dev/null | head -30 || echo 'none or error'
+    /workspace/Cuuper22/README.md
+    /workspace/Cuuper22/logs/audit_full_latest.log
+    /workspace/Cuuper22/container_audit.py
+    /workspace/Cuuper22/.git/refs/heads/work
+    /workspace/Cuuper22/.git/description
+    /workspace/Cuuper22/.git/info/exclude
+    /workspace/Cuuper22/.git/config
+    /workspace/Cuuper22/.git/logs/HEAD
+    /workspace/Cuuper22/.git/hooks/fsmonitor-watchman.sample
+    /workspace/Cuuper22/.git/hooks/pre-applypatch.sample
+    /workspace/Cuuper22/.git/hooks/pre-receive.sample
+    /workspace/Cuuper22/.git/hooks/prepare-commit-msg.sample
+    /workspace/Cuuper22/.git/hooks/commit-msg.sample
+    /workspace/Cuuper22/.git/hooks/pre-commit.sample
+    /workspace/Cuuper22/.git/hooks/pre-merge-commit.sample
+    /workspace/Cuuper22/.git/hooks/push-to-checkout.sample
+    /workspace/Cuuper22/.git/hooks/update.sample
+    /workspace/Cuuper22/.git/hooks/pre-push.sample
+    /workspace/Cuuper22/.git/hooks/post-update.sample
+    /workspace/Cuuper22/.git/hooks/applypatch-msg.sample
+    /workspace/Cuuper22/.git/hooks/pre-rebase.sample
+    /workspace/Cuuper22/.git/hooks/sendemail-validate.sample
+    /workspace/Cuuper22/.git/index
+    /workspace/Cuuper22/.git/packed-refs
+    /workspace/Cuuper22/.git/COMMIT_EDITMSG
+    /workspace/Cuuper22/.git/FETCH_HEAD
+    /workspace/Cuuper22/.git/objects/1d/23cab23ba66b1857ee62740c59f817c9cfe96b
+    /workspace/Cuuper22/.git/objects/7c/5503cdb1aee550655886df5a811512f9e3d1a6
+    /workspace/Cuuper22/.git/objects/6c/ef3eeeddb100830929128c32fa5a6a1280fd03
+    /workspace/Cuuper22/.git/objects/5e/69ceb1d207b7e8b4095bd38850c7fd691dc828
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  6. KERNEL HARDENING (/proc/sys/kernel)                        ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  These values are set by the host kernel. In gVisor they may be synthetic or absent.
+  [0;35m[NOTE][0m  Absence (file not found) is marked [NOT EXPOSED] — gVisor virtualises away many of these.
+
+    $ cat /proc/sys/kernel/perf_event_paranoid
+    2
+  [0;32m[PASS][0m  perf_event_paranoid=2: perf restricted to own process
+
+    $ cat /proc/sys/kernel/kptr_restrict
+    1
+  [0;32m[PASS][0m  kptr_restrict (kernel pointer exposure)=1: kernel pointers hidden from non-root
+
+    $ cat /proc/sys/kernel/dmesg_restrict
+    0
+  [0;33m[WARN][0m  dmesg_restrict=0: dmesg readable by all — may contain kernel addresses
+
+    $ cat /proc/sys/kernel/randomize_va_space
+    2
+  [0;32m[PASS][0m  randomize_va_space (ASLR)=2: full ASLR — heap, stack, mmap all randomised
+
+    $ cat /proc/sys/kernel/yama/ptrace_scope
+    [NOT EXPOSED — file not found; gVisor virtualises this away]
+  [0;36m[INFO][0m  yama/ptrace_scope: not exposed by this runtime
+
+    $ cat /proc/sys/user/max_user_namespaces
+    7896
+  [0;36m[INFO][0m  max_user_namespaces=7896 — not in known-value map
+
+    $ cat /proc/sys/net/ipv4/ip_forward
+    0
+  [0;32m[PASS][0m  ip_forward=0: IP forwarding disabled
+
+  ┌─ core_pattern — core dump destination
+  [0;35m[NOTE][0m  A pattern starting with '|' means core dumps are PIPED TO A PROGRAM — dangerous.
+  [0;35m[NOTE][0m  Core dumps contain full process memory including secrets and tokens.
+
+    $ cat /proc/sys/kernel/core_pattern
+    core
+  [0;36m[INFO][0m  core_pattern: 'core' — dumps written to path
+
+    $ ulimit -c
+    0
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  7. NETWORK CONFIGURATION AND CONNECTIONS                      ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ Network interfaces
+
+    $ ip addr show 2>/dev/null || ifconfig 2>/dev/null
+    (no output)
+    [exit 127 — no output]
+
+  ┌─ Routing table — default gateway is the lateral movement target
+  [0;35m[NOTE][0m  The gateway IP is what we can reach via TCP. Neighbours are ±10 IPs around it.
+
+    $ ip route 2>/dev/null || route -n 2>/dev/null
+    (no output)
+    [exit 127 — no output]
+  [0;36m[INFO][0m  Could not extract gateway from /proc/net/route
+
+  ┌─ /proc/net/tcp — all TCP sockets with decoded addresses
+  [0;35m[NOTE][0m  State LISTEN = accepting connections. ESTABLISHED = active session.
+  [0;35m[NOTE][0m  Hex addresses in /proc/net/tcp are little-endian. Decoded here to dotted-decimal:port.
+
+    $ decode /proc/net/tcp
+
+    $ cat /proc/net/tcp
+    sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode                                                     
+       0: C2041EAC:A150 C3041EAC:1F90 01 00000000:00000000 00:00000000 00000000     0        0 15322 1 0000000000000000 20 4 0 63 -1
+  [0;35m[NOTE][0m  Decoded view:
+    172.30.4.194:41296        → 172.30.4.195:8080          [ESTABLISHED]
+  [0;33m[WARN][0m  Active outbound TCP: 172.30.4.194:41296 → 172.30.4.195:8080
+
+  ┌─ /proc/net/udp — UDP sockets
+
+    $ cat /proc/net/udp
+    sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode ref pointer drops            
+      308: 0100007F:0143 00000000:0000 07 00000000:00000000 00:00000000 00000000     0        0 1390 2 0000000000000000 0
+
+  ┌─ ss / netstat — listening services
+
+    $ ss -tlnp 2>/dev/null || netstat -tlnp 2>/dev/null || echo 'ss/netstat not available'
+    ss/netstat not available
+
+  ┌─ ARP table — neighbours already seen on this L2 segment
+  [0;35m[NOTE][0m  Hosts here have communicated recently. These are lateral movement targets.
+
+    $ cat /proc/net/arp
+    IP address       HW type     Flags       HW address            Mask     Device
+    172.30.4.195     0x1         0x2         06:a2:1a:55:e0:a0     *        eth0
+
+    $ ip neigh show 2>/dev/null || arp -n 2>/dev/null || echo 'not available'
+    not available
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  8. EGRESS TESTING AND TLS INSPECTION                          ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Testing: (1) can we open outbound TCP? (2) is TLS being intercepted (MITM)?
+  [0;35m[NOTE][0m  TLS interception: the proxy terminates TLS, reads plaintext, re-encrypts to us.
+  [0;35m[NOTE][0m  Evidence: cert issuer CN contains words like 'inspection', 'proxy', 'sandbox'.
+  [0;35m[NOTE][0m  Expected issuers: DigiCert, Let's Encrypt, Amazon, GlobalSign, Sectigo.
+
+  ┌─ TCP reachability probes — pure connect(), no HTTP
+  [0;35m[NOTE][0m  Tells us which ports are open regardless of TLS or HTTP behaviour.
+  [0;32m[PASS][0m  TCP BLOCKED  ifconfig.me:443  (IP echo — confirms egress and shows exit IP)
+  [0;32m[PASS][0m  TCP BLOCKED  dns.google:443  (Google DNS-over-HTTPS)
+  [0;32m[PASS][0m  TCP BLOCKED  1.1.1.1:80  (Cloudflare plain HTTP)
+  [0;32m[PASS][0m  TCP BLOCKED  api.anthropic.com:443  (Anthropic API)
+  [0;32m[PASS][0m  TCP BLOCKED  github.com:443  (GitHub)
+  [0;32m[PASS][0m  TCP BLOCKED  pypi.org:443  (Python Package Index)
+
+  ┌─ HTTP/HTTPS requests — full response headers and body excerpt
+  [0;35m[NOTE][0m  curl -sv shows: TLS handshake, cert chain, HTTP response code, headers, body.
+
+  ── IP echo — confirms egress and shows exit IP ──
+
+    $ curl -sSvL --max-time 8 'https://ifconfig.me' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to ifconfig.me:443
+    > CONNECT ifconfig.me:443 HTTP/1.1
+    > Host: ifconfig.me:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1859 bytes data]
+    * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+    { [78 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Finished (20):
+    { [52 bytes data]
+    * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+    } [1 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Finished (20):
+    } [52 bytes data]
+    * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+    * ALPN: server did not agree on a protocol. Uses default.
+    * Server certificate:
+    *  subject: CN=ifconfig.me
+    *  start date: Apr 22 06:29:25 2026 GMT
+    *  expire date: Apr 22 06:30:25 2027 GMT
+    *  subjectAltName: host "ifconfig.me" matched cert's "ifconfig.me"
+    *  issuer: C=US; ST=California; L=San Francisco; O=OpenAI; CN=egress-proxy
+    *  SSL certificate verify ok.
+    *   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using sha256WithRSAEncryption
+    *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+    * using HTTP/1.x
+    } [5 bytes data]
+    > GET / HTTP/1.1
+    > Host: ifconfig.me
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > 
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * old SSL session ID is stale, removing
+    { [5 bytes data]
+    < HTTP/1.1 200 OK
+    < content-length: 13
+    < access-control-allow-origin: *
+    < content-type: text/plain
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < via: 1.1 google
+    < alt-svc: h3=":443"; ma=2592000,h3-29=":443"; ma=2592000
+    < x-envoy-upstream-service-time: 72
+    < server: envoy
+    < 
+    { [13 bytes data]
+    * Connection #0 to host proxy left intact
+    52.173.178.60
+
+  ── Google DNS-over-HTTPS ──
+
+    $ curl -sSvL --max-time 8 'https://dns.google' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to dns.google:443
+    > CONNECT dns.google:443 HTTP/1.1
+    > Host: dns.google:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1857 bytes data]
+    * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+    { [79 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Finished (20):
+    { [52 bytes data]
+    * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+    } [1 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Finished (20):
+    } [52 bytes data]
+    * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+    * ALPN: server did not agree on a protocol. Uses default.
+    * Server certificate:
+    *  subject: CN=dns.google
+    *  start date: Apr 22 06:29:25 2026 GMT
+    *  expire date: Apr 22 06:30:25 2027 GMT
+    *  subjectAltName: host "dns.google" matched cert's "dns.google"
+    *  issuer: C=US; ST=California; L=San Francisco; O=OpenAI; CN=egress-proxy
+    *  SSL certificate verify ok.
+    *   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using sha256WithRSAEncryption
+    *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+    * using HTTP/1.x
+    } [5 bytes data]
+    > GET / HTTP/1.1
+    > Host: dns.google
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > 
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * old SSL session ID is stale, removing
+    { [5 bytes data]
+    < HTTP/1.1 200 OK
+    < content-security-policy: object-src 'none';base-uri 'self';script-src 'nonce-IcZjgXSjEVxHzuoCvPCwyA' 'strict-dynamic' 'report-sample' 'unsafe-eval' 'unsafe-inline' https: http:;report-uri https://csp.withgoogle.com/csp/honest_dns/1_0;frame-ancestors 'none'
+    < strict-transport-security: max-age=31536000; includeSubDomains; preload
+    < x-content-type-options: nosniff
+    < content-security-policy-report-only: script-src 'none'; form-action 'none'; frame-src 'none'; report-uri https://csp.withgoogle.com/csp/scaffolding/ntdsgswbsc:55:0
+    < cross-origin-opener-policy-report-only: same-origin; report-to=ntdsgswbsc:55:0
+    < report-to: {"group":"ntdsgswbsc:55:0","max_age":2592000,"endpoints":[{"url":"https://csp.withgoogle.com/csp/report-to/scaffolding/ntdsgswbsc:55:0"}],}
+    < server: envoy
+    < x-xss-protection: 0
+    < x-frame-options: SAMEORIGIN
+    < date: Wed, 22 Apr 2026 06:38:25 GMT
+    < expires: Wed, 22 Apr 2026 06:43:25 GMT
+    < cache-control: public, max-age=300
+
+  ── Cloudflare plain HTTP ──
+
+    $ curl -sSvL --max-time 8 'http://1.1.1.1' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable http_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    > GET http://1.1.1.1/ HTTP/1.1
+    > Host: 1.1.1.1
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 301 Moved Permanently
+    < server: envoy
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < content-type: text/html
+    < content-length: 167
+    < location: https://1.1.1.1/
+    < cf-ray: 9f02a28f2b6961d9-ORD
+    < x-envoy-upstream-service-time: 32
+    < 
+    * Ignoring the response-body
+    * Connection #0 to host proxy left intact
+    * Clear auth, redirects to port from 80 to 443
+    * Issue another request to this URL: 'https://1.1.1.1/'
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Hostname proxy was found in DNS cache
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to 1.1.1.1:443
+    > CONNECT 1.1.1.1:443 HTTP/1.1
+    > Host: 1.1.1.1:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1014 bytes data]
+    * TLSv1.3 (OUT), TLS alert, unsupported certificate (555):
+    } [2 bytes data]
+    * SSL certificate problem: unsuitable certificate purpose
+    * Closing connection
+    curl: (60) SSL certificate problem: unsuitable certificate purpose
+    More details here: https://curl.se/docs/sslcerts.html
+    
+    curl failed to verify the legitimacy of the server and therefore could not
+    establish a secure connection to it. To learn more about this situation and
+    how to fix it, please visit the web page mentioned above.
+
+  ── Anthropic API ──
+
+    $ curl -sSvL --max-time 8 'https://api.anthropic.com' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to api.anthropic.com:443
+    > CONNECT api.anthropic.com:443 HTTP/1.1
+    > Host: api.anthropic.com:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1872 bytes data]
+    * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+    { [79 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Finished (20):
+    { [52 bytes data]
+    * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+    } [1 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Finished (20):
+    } [52 bytes data]
+    * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+    * ALPN: server did not agree on a protocol. Uses default.
+    * Server certificate:
+    *  subject: CN=api.anthropic.com
+    *  start date: Apr 22 06:29:25 2026 GMT
+    *  expire date: Apr 22 06:30:25 2027 GMT
+    *  subjectAltName: host "api.anthropic.com" matched cert's "api.anthropic.com"
+    *  issuer: C=US; ST=California; L=San Francisco; O=OpenAI; CN=egress-proxy
+    *  SSL certificate verify ok.
+    *   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using sha256WithRSAEncryption
+    *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+    * using HTTP/1.x
+    } [5 bytes data]
+    > GET / HTTP/1.1
+    > Host: api.anthropic.com
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > 
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * old SSL session ID is stale, removing
+    { [5 bytes data]
+    < HTTP/1.1 404 Not Found
+    < date: Wed, 22 Apr 2026 06:40:05 GMT
+    < content-type: text/plain
+    < content-length: 132
+    < cache-control: private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0
+    < expires: Thu, 01 Jan 1970 00:00:01 GMT
+    < referrer-policy: same-origin
+    < x-frame-options: SAMEORIGIN
+    < content-security-policy: default-src 'none'; frame-ancestors 'none'
+    < x-robots-tag: none
+    < server: envoy
+    < cf-ray: 9f02a28fcd70db47-DFW
+    < x-envoy-upstream-service-time: 48
+
+  ── GitHub ──
+
+    $ curl -sSvL --max-time 8 'https://github.com' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to github.com:443
+    > CONNECT github.com:443 HTTP/1.1
+    > Host: github.com:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1857 bytes data]
+    * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+    { [80 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Finished (20):
+    { [52 bytes data]
+    * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+    } [1 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Finished (20):
+    } [52 bytes data]
+    * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+    * ALPN: server did not agree on a protocol. Uses default.
+    * Server certificate:
+    *  subject: CN=github.com
+    *  start date: Apr 22 06:29:06 2026 GMT
+    *  expire date: Apr 22 06:30:06 2027 GMT
+    *  subjectAltName: host "github.com" matched cert's "github.com"
+    *  issuer: C=US; ST=California; L=San Francisco; O=OpenAI; CN=egress-proxy
+    *  SSL certificate verify ok.
+    *   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using sha256WithRSAEncryption
+    *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+    * using HTTP/1.x
+    } [5 bytes data]
+    > GET / HTTP/1.1
+    > Host: github.com
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > 
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * old SSL session ID is stale, removing
+    { [5 bytes data]
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:04 GMT
+    < content-type: text/html; charset=utf-8
+    < vary: X-PJAX, X-PJAX-Container, Turbo-Visit, Turbo-Frame, X-Requested-With, Accept-Language, Sec-Fetch-Site,Accept-Encoding, Accept, X-Requested-With
+    < content-language: en-US
+    < etag: W/"ddd4ecf59121f578d33937d4a86eb49e"
+    < cache-control: max-age=0, private, must-revalidate
+    < strict-transport-security: max-age=31536000; includeSubdomains; preload
+    < x-frame-options: deny
+    < x-content-type-options: nosniff
+    < x-xss-protection: 0
+    < referrer-policy: origin-when-cross-origin, strict-origin-when-cross-origin
+    < content-security-policy: default-src 'none'; base-uri 'self'; child-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/; connect-src 'self' uploads.github.com www.githubstatus.com collector.github.com raw.githubusercontent.com api.github.com github-cloud.s3.amazonaws.com github-production-repository-file-5c1aeb.s3.amazonaws.com github-production-upload-manifest-file-7fdce7.s3.amazonaws.com github-production-user-asset-6210df.s3.amazonaws.com *.rel.tunnels.api.visualstudio.com wss://*.rel.tunnels.api.visualstudio.com github.githubassets.com objects-origin.githubusercontent.com copilot-proxy.githubusercontent.com proxy.individual.githubcopilot.com proxy.business.githubcopilot.com proxy.enterprise.githubcopilot.com *.actions.githubusercontent.com wss://*.actions.githubusercontent.com productionresultssa0.blob.core.windows.net productionresultssa1.blob.core.windows.net productionresultssa2.blob.core.windows.net productionresultssa3.blob.core.windows.net productionresultssa4.blob.core.windows.net productionresultssa5.blob.core.windows.net productionresultssa6.blob.core.windows.net productionresultssa7.blob.core.windows.net productionresultssa8.blob.core.windows.net productionresultssa9.blob.core.windows.net productionresultssa10.blob.core.windows.net productionresultssa11.blob.core.windows.net productionresultssa12.blob.core.windows.net productionresultssa13.blob.core.windows.net productionresultssa14.blob.core.windows.net productionresultssa15.blob.core.windows.net productionresultssa16.blob.core.windows.net productionresultssa17.blob.core.windows.net productionresultssa18.blob.core.windows.net productionresultssa19.blob.core.windows.net github-production-repository-image-32fea6.s3.amazonaws.com github-production-release-asset-2e65be.s3.amazonaws.com insights.github.com wss://alive.github.com wss://alive-staging.github.com api.githubcopilot.com api.individual.githubcopilot.com api.business.githubcopilot.com api.enterprise.githubcopilot.com edge.fullstory.com rs.fullstory.com; font-src github.githubassets.com; form-action 'self' github.com gist.github.com copilot-workspace.githubnext.com objects-origin.githubusercontent.com; frame-ancestors 'none'; frame-src viewscreen.githubusercontent.com notebooks.githubusercontent.com www.youtube-nocookie.com; img-src 'self' data: blob: github.githubassets.com media.githubusercontent.com camo.githubusercontent.com identicons.github.com avatars.githubusercontent.com private-avatars.githubusercontent.com github-cloud.s3.amazonaws.com objects.githubusercontent.com release-assets.githubusercontent.com secured-user-images.githubusercontent.com user-images.githubusercontent.com private-user-images.githubusercontent.com opengraph.githubassets.com marketplace-screenshots.githubusercontent.com copilotprodattachments.blob.core.windows.net/github-production-copilot-attachments/ github-production-user-asset-6210df.s3.amazonaws.com customer-stories-feed.github.com spotlights-feed.github.com objects-origin.githubusercontent.com *.githubusercontent.com images.ctfassets.net/8aevphvgewt8/; manifest-src 'self'; media-src github.com user-images.githubusercontent.com secured-user-images.githubusercontent.com private-user-images.githubusercontent.com github-production-user-asset-6210df.s3.amazonaws.com gist.github.com github.githubassets.com assets.ctfassets.net/8aevphvgewt8/ videos.ctfassets.net/8aevphvgewt8/; script-src github.githubassets.com; style-src 'unsafe-inline' github.githubassets.com; upgrade-insecure-requests; worker-src github.githubassets.com github.com/assets-cdn/worker/ github.com/assets/ gist.github.com/assets-cdn/worker/
+
+  ── Python Package Index ──
+
+    $ curl -sSvL --max-time 8 'https://pypi.org' 2>&1 | head -80
+    * Uses proxy env variable no_proxy == 'localhost,127.0.0.1,::1'
+    * Uses proxy env variable https_proxy == 'http://proxy:8080'
+    * Host proxy:8080 was resolved.
+    * IPv6: (none)
+    * IPv4: 172.30.4.195
+    *   Trying 172.30.4.195:8080...
+    * Connected to proxy (172.30.4.195) port 8080
+    * CONNECT tunnel: HTTP/1.1 negotiated
+    * allocate connect buffer
+    * Establish HTTP proxy tunnel to pypi.org:443
+    > CONNECT pypi.org:443 HTTP/1.1
+    > Host: pypi.org:443
+    > User-Agent: curl/8.5.0
+    > Proxy-Connection: Keep-Alive
+    > 
+    < HTTP/1.1 200 OK
+    < date: Wed, 22 Apr 2026 06:40:05 GMT
+    < server: envoy
+    < 
+    * CONNECT phase completed
+    * CONNECT tunnel established, response 200
+    * ALPN: curl offers h2,http/1.1
+    } [5 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Client hello (1):
+    } [512 bytes data]
+    *  CAfile: /usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    *  CApath: /etc/ssl/certs
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Server hello (2):
+    { [122 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Encrypted Extensions (8):
+    { [6 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Certificate (11):
+    { [1853 bytes data]
+    * TLSv1.3 (IN), TLS handshake, CERT verify (15):
+    { [79 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Finished (20):
+    { [52 bytes data]
+    * TLSv1.3 (OUT), TLS change cipher, Change cipher spec (1):
+    } [1 bytes data]
+    * TLSv1.3 (OUT), TLS handshake, Finished (20):
+    } [52 bytes data]
+    * SSL connection using TLSv1.3 / TLS_AES_256_GCM_SHA384 / X25519 / id-ecPublicKey
+    * ALPN: server did not agree on a protocol. Uses default.
+    * Server certificate:
+    *  subject: CN=pypi.org
+    *  start date: Apr 22 06:29:25 2026 GMT
+    *  expire date: Apr 22 06:30:25 2027 GMT
+    *  subjectAltName: host "pypi.org" matched cert's "pypi.org"
+    *  issuer: C=US; ST=California; L=San Francisco; O=OpenAI; CN=egress-proxy
+    *  SSL certificate verify ok.
+    *   Certificate level 0: Public key type EC/prime256v1 (256/128 Bits/secBits), signed using sha256WithRSAEncryption
+    *   Certificate level 1: Public key type RSA (2048/112 Bits/secBits), signed using sha256WithRSAEncryption
+    * using HTTP/1.x
+    } [5 bytes data]
+    > GET / HTTP/1.1
+    > Host: pypi.org
+    > User-Agent: curl/8.5.0
+    > Accept: */*
+    > 
+    { [5 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * TLSv1.3 (IN), TLS handshake, Newsession Ticket (4):
+    { [198 bytes data]
+    * old SSL session ID is stale, removing
+    { [5 bytes data]
+    < HTTP/1.1 200 OK
+    < content-security-policy: base-uri 'self'; connect-src 'self' https://api.github.com/repos/ https://api.github.com/search/issues https://gitlab.com/api/ https://analytics.python.org *.ethicalads.io https://api.pwnedpasswords.com https://cdn.jsdelivr.net/npm/mathjax@3.2.2/es5/sre/mathmaps/ https://2p66nmmycsj3.statuspage.io; default-src 'none'; font-src 'self'; form-action 'self' https://checkout.stripe.com https://billing.stripe.com; frame-ancestors 'none'; frame-src 'none'; img-src 'self' https://pypi-camo.freetls.fastly.net/ *.ethicalads.io ethicalads.blob.core.windows.net; script-src 'self' https://analytics.python.org *.ethicalads.io 'sha256-U3hKDidudIaxBDEzwGJApJgPEf2mWk6cfMWghrAa6i0=' https://cdn.jsdelivr.net/npm/mathjax@3.2.2/ 'sha256-1CldwzdEg2k1wTmf7s5RWVd7NMXI/7nxxjJM2C4DqII=' 'sha256-0POaN8stWYQxhzjKS+/eOfbbJ/u4YHO5ZagJvLpMypo='; style-src 'self' *.ethicalads.io 'sha256-2YHqZokjiizkHi1Zt+6ar0XJ0OeEy/egBnlm+MDMtrM=' 'sha256-47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=' 'sha256-JLEjeN9e5dGsz5475WyRaoA4eQOdNPxDIeUhclnJDCE=' 'sha256-mQyxHEuwZJqpxCw3SLmc4YOySNKXunyu2Oiz1r3/wAE=' 'sha256-OCf+kv5Asiwp++8PIevKBYSgnNLNUZvxAp4a7wMLuKA=' 'sha256-h5LOiLhk6wiJrGsG5ItM0KimwzWQH/yAcmoJDJL//bY='
+    < server: envoy
+    < etag: "aSFae3qQTq7POI4dS4g0ug"
+    < content-type: text/html; charset=UTF-8
+    < referrer-policy: origin-when-cross-origin
+    < accept-ranges: bytes
+    < date: Wed, 22 Apr 2026 06:40:05 GMT
+    < x-served-by: cache-iad-kjyo7100089-IAD, cache-iad-kjyo7100172-IAD, cache-chi-kigq8000025-CHI
+    < x-cache: MISS, HIT, HIT
+    < x-cache-hits: 0, 65, 1
+    < x-timer: S1776840005.317664,VS0,VE1
+    < vary: Accept-Encoding, Cookie
+
+  ┌─ TLS certificate chain inspection — openssl s_client
+  [0;35m[NOTE][0m  Shows the full certificate chain Anthropic's TLS proxy presents.
+  [0;35m[NOTE][0m  Check: does the Issuer on the leaf cert match the real CA, or is it a proxy CA?
+  [0;35m[NOTE][0m  MITM indicators in issuer CN: 'inspection', 'proxy', 'sandbox', 'zscaler', 'netskope',
+  [0;35m[NOTE][0m    'bluecoat', 'forcepoint', 'cisco umbrella', 'anthropic', 'egress'.
+
+  ┌─ DNS resolution — which server answers, are results trustworthy?
+  [0;35m[NOTE][0m  Comparing DNS answers. If internal names resolve to unexpected IPs, DNS is being hijacked.
+
+    $ dig +short ifconfig.me 2>/dev/null || python3 -c "import socket; print(socket.gethostbyname('ifconfig.me'))" 2>/dev/null || getent hosts ifconfig.me 2>/dev/null || echo 'resolution failed'
+    34.160.111.145
+
+    $ dig +short api.anthropic.com 2>/dev/null || python3 -c "import socket; print(socket.gethostbyname('api.anthropic.com'))" 2>/dev/null || getent hosts api.anthropic.com 2>/dev/null || echo 'resolution failed'
+    160.79.104.10
+
+    $ dig +short github.com 2>/dev/null || python3 -c "import socket; print(socket.gethostbyname('github.com'))" 2>/dev/null || getent hosts github.com 2>/dev/null || echo 'resolution failed'
+    140.82.114.4
+
+    $ dig +short kubernetes.default.svc.cluster.local 2>/dev/null || python3 -c "import socket; print(socket.gethostbyname('kubernetes.default.svc.cluster.local'))" 2>/dev/null || getent hosts kubernetes.default.svc.cluster.local 2>/dev/null || echo 'resolution failed'
+    (no output)
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  9. ENVIRONMENT AND SECRETS                                    ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  ALL environment variables are shown — no pre-filtering on key names.
+  [0;35m[NOTE][0m  Improper config shows up in values too (wrong URLs, debug flags, blank secrets, etc.).
+  [0;35m[NOTE][0m  Both key name AND value are checked for patterns of interest.
+
+  ┌─ Current process environment — full, sorted, annotated
+  [0;35m[NOTE][0m  Raw `env` output first, then annotation pass on every line.
+
+    $ env | sort
+    CODEX_CI=1
+    CODEX_ENV_BUN_VERSION=1.2.14
+    CODEX_ENV_GO_VERSION=1.24.3
+    CODEX_ENV_JAVA_VERSION=21
+    CODEX_ENV_NODE_VERSION=20
+    CODEX_ENV_PHP_VERSION=8.4
+    CODEX_ENV_PYTHON_VERSION=3.12
+    CODEX_ENV_RUBY_VERSION=3.4.4
+    CODEX_ENV_RUST_VERSION=1.89.0
+    CODEX_ENV_SWIFT_VERSION=6.1
+    CODEX_HOME=/opt/codex
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent
+    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    CODEX_THREAD_ID=019db3e2-1125-72e3-979d-0475cafcccee
+    COLORTERM=
+    COREPACK_DEFAULT_TO_LATEST=0
+    COREPACK_ENABLE_AUTO_PIN=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_STRICT=0
+    DEBIAN_FRONTEND=noninteractive
+    ELECTRON_GET_USE_PROXY=true
+    GH_PAGER=cat
+    GIT_PAGER=cat
+    GOBIN=/root/.local/share/mise/installs/go/1.24.3/bin
+    GOROOT=/root/.local/share/mise/installs/go/1.24.3
+    GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+    HOME=/root
+    HOSTNAME=cb92b62ee437
+    HTTPS_PROXY=http://proxy:8080
+    HTTP_PROXY=http://proxy:8080
+    JAVA_HOME=/root/.local/share/mise/installs/java/21.0.2
+    LANG=C.UTF-8
+    LC_ALL=C.UTF-8
+    LC_CTYPE=C.UTF-8
+    MISE_SHELL=bash
+    MIX_ARCHIVES=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/archives
+    MIX_HOME=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix
+    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    NO_COLOR=1
+    NO_PROXY=browser
+    NVM_BIN=/root/.nvm/versions/node/v20.19.6/bin
+    NVM_CD_FLAGS=
+    NVM_DIR=/root/.nvm
+    NVM_INC=/root/.nvm/versions/node/v20.19.6/include/node
+    OPENAI_BASE_URL=https://api.openai.com:18080/
+    OPENAI_CLUSTER=applied-caas6
+    PAGER=cat
+    PATH=/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root/.pyenv/plugins/python-build/bin:/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PHPENV_ROOT=/root/.phpenv
+    PIPX_BIN_DIR=/root/.local/bin
+    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    PWD=/workspace/Cuuper22
+    PYENV_DIR=/workspace/Cuuper22
+    PYENV_HOOK_PATH=/root/.pyenv/pyenv.d:/usr/etc/pyenv.d:/usr/local/etc/pyenv.d:/etc/pyenv.d:/usr/lib/pyenv/hooks
+    PYENV_ROOT=/root/.pyenv
+    PYENV_SHELL=bash
+    PYENV_VERSION=3.12.12
+    REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    SHLVL=1
+    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    SWIFTLY_BIN_DIR=/root/.swiftly/bin
+    SWIFTLY_HOME_DIR=/root/.local/share/swiftly
+    SWIFTLY_TOOLCHAINS_DIR=/root/.local/share/swiftly/toolchains
+    TERM=dumb
+    UV_NO_PROGRESS=1
+    YARN_HTTPS_PROXY=http://proxy:8080
+    YARN_HTTP_PROXY=http://proxy:8080
+    __MISE_DIFF=eAFqXpyfk9KwOC+1vHWpu7+Tp99NPf2i/PwSfb2c/OTEHP3ijMSiVP3czOJU/cy84pLEnJxi/fR8fUM9IxM9Y/2kzLxl7v5B/v4hN7WI17bSyzHMMd7D39f1pg5BXVmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtqQgsSRj1k19giYkleaBAk7P0AQUcDeNCGpILcpJzEvXNzLXM9QzAushMXJuhhC0Iz0fZEdypm5OZl6JvpGeoZ6ZPoqYLlgMJF1aoZuYm2JmctOBsKlFiSk5qfoWeoagZJIO5ulCeUmZeTcNCJqAFO+AgX3uSlBHbmJZap6+sZ6lnqGBfmJBYnJGqi5YTBcqBrKYcCwVlSZV6hvrmehBYsmSoL1YkxnILkpSaGpxclFmQUkxAAc+SC4
+    __MISE_ORIG_PATH=/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    __MISE_SESSION=eAHqWJOTn5iSmhJfkp+fUzxhHZSXnJ+XlplePHGfflF+fom+HoSvn5tZnKoPYeuV5OfmrIGw4wsSSzKKJyxOzStrXeru7+Tpd1MPqjEnPzkxR784I7EoFaI7M6+4JDEnp1g/PV/fUM/IRM9YPykzb5m7f5C/f8hNLeK1rfRyDHOM9/D3db2pQ1AXYFmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtjwxJzOxOLW4YXFKZtFm/fL8ouzigsTkVH3n0tKC1CIjozWpeWXxZYlF8RmJxRkbkowtDVPTTA2SzA2TDU0tzNbmJJakFpfElxakJJakHhFggAPGuZtfcb0AAABdsds
+    http_proxy=http://proxy:8080
+    https_proxy=http://proxy:8080
+    no_proxy=localhost,127.0.0.1,::1
+    npm_config_http_proxy=http://proxy:8080
+    npm_config_https_proxy=http://proxy:8080
+  [0;35m[NOTE][0m  Annotation pass — key name AND value both checked:
+    CODEX_CI=1
+    CODEX_ENV_BUN_VERSION=1.2.14
+    CODEX_ENV_GO_VERSION=1.24.3
+    CODEX_ENV_JAVA_VERSION=21
+    CODEX_ENV_NODE_VERSION=20
+    CODEX_ENV_PHP_VERSION=8.4
+    CODEX_ENV_PYTHON_VERSION=3.12
+    CODEX_ENV_RUBY_VERSION=3.4.4
+    CODEX_ENV_RUST_VERSION=1.89.0
+    CODEX_ENV_SWIFT_VERSION=6.1
+    CODEX_HOME=/opt/codex
+    CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent
+  [0;31m[RISK][0m    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    CODEX_THREAD_ID=019db3e2-1125-72e3-979d-0475cafcccee
+  [0;31m[RISK][0m    COLORTERM=   ← EMPTY VALUE — may mean unset secret or misconfigured blank
+    COREPACK_DEFAULT_TO_LATEST=0
+    COREPACK_ENABLE_AUTO_PIN=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_STRICT=0
+  [0;31m[RISK][0m    DEBIAN_FRONTEND=noninteractive   ← value pattern of interest ('noninteractive')
+  [0;31m[RISK][0m    ELECTRON_GET_USE_PROXY=true   ← value pattern of interest ('true')
+    GH_PAGER=cat
+    GIT_PAGER=cat
+    GOBIN=/root/.local/share/mise/installs/go/1.24.3/bin
+    GOROOT=/root/.local/share/mise/installs/go/1.24.3
+    GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+    HOME=/root
+    HOSTNAME=cb92b62ee437
+    HTTPS_PROXY=http://proxy:8080
+    HTTP_PROXY=http://proxy:8080
+    JAVA_HOME=/root/.local/share/mise/installs/java/21.0.2
+    LANG=C.UTF-8
+    LC_ALL=C.UTF-8
+    LC_CTYPE=C.UTF-8
+    MISE_SHELL=bash
+    MIX_ARCHIVES=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/archives
+    MIX_HOME=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix
+  [0;31m[RISK][0m    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    NO_COLOR=1
+    NO_PROXY=browser
+  [0;31m[RISK][0m    NVM_BIN=/root/.nvm/versions/node/v20.19.6/bin   ← value pattern of interest ('/root/.nvm/versions/node/v20.19.6/bin')
+  [0;31m[RISK][0m    NVM_CD_FLAGS=   ← EMPTY VALUE — may mean unset secret or misconfigured blank
+    NVM_DIR=/root/.nvm
+  [0;31m[RISK][0m    NVM_INC=/root/.nvm/versions/node/v20.19.6/include/node   ← value pattern of interest ('/root/.nvm/versions/node/v20.19.6/include/node')
+    OPENAI_BASE_URL=https://api.openai.com:18080/
+    OPENAI_CLUSTER=applied-caas6
+    PAGER=cat
+  [0;31m[RISK][0m    PATH=/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root/.pyenv/plugins/python-build/bin:/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   ← value pattern of interest ('/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root')
+    PHPENV_ROOT=/root/.phpenv
+    PIPX_BIN_DIR=/root/.local/bin
+  [0;31m[RISK][0m    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+  [0;31m[RISK][0m    PWD=/workspace/Cuuper22   ← key name pattern
+    PYENV_DIR=/workspace/Cuuper22
+    PYENV_HOOK_PATH=/root/.pyenv/pyenv.d:/usr/etc/pyenv.d:/usr/local/etc/pyenv.d:/etc/pyenv.d:/usr/lib/pyenv/hooks
+    PYENV_ROOT=/root/.pyenv
+    PYENV_SHELL=bash
+    PYENV_VERSION=3.12.12
+    REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    SHLVL=1
+  [0;31m[RISK][0m    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    SWIFTLY_BIN_DIR=/root/.swiftly/bin
+    SWIFTLY_HOME_DIR=/root/.local/share/swiftly
+    SWIFTLY_TOOLCHAINS_DIR=/root/.local/share/swiftly/toolchains
+    TERM=dumb
+    UV_NO_PROGRESS=1
+    YARN_HTTPS_PROXY=http://proxy:8080
+    YARN_HTTP_PROXY=http://proxy:8080
+    __MISE_DIFF=eAFqXpyfk9KwOC+1vHWpu7+Tp99NPf2i/PwSfb2c/OTEHP3ijMSiVP3czOJU/cy84pLEnJxi/fR8fUM9IxM9Y/2kzLxl7v5B/v4hN7WI17bSyzHMMd7D39f1pg5BXVmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtqQgsSRj1k19giYkleaBAk7P0AQUcDeNCGpILcpJzEvXNzLXM9QzAushMXJuhhC0Iz0fZEdypm5OZl6JvpGeoZ6ZPoqYLlgMJF1aoZuYm2JmctOBsKlFiSk5qfoWeoagZJIO5ulCeUmZeTcNCJqAFO+AgX3uSlBHbmJZap6+sZ6lnqGBfmJBYnJGqi5YTBcqBrKYcCwVlSZV6hvrmehBYsmSoL1YkxnILkpSaGpxclFmQUkxAAc+SC4
+    __MISE_ORIG_PATH=/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    __MISE_SESSION=eAHqWJOTn5iSmhJfkp+fUzxhHZSXnJ+XlplePHGfflF+fom+HoSvn5tZnKoPYeuV5OfmrIGw4wsSSzKKJyxOzStrXeru7+Tpd1MPqjEnPzkxR784I7EoFaI7M6+4JDEnp1g/PV/fUM/IRM9YPykzb5m7f5C/f8hNLeK1rfRyDHOM9/D3db2pQ1AXYFmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtjwxJzOxOLW4YXFKZtFm/fL8ouzigsTkVH3n0tKC1CIjozWpeWXxZYlF8RmJxRkbkowtDVPTTA2SzA2TDU0tzNbmJJakFpfElxakJJakHhFggAPGuZtfcb0AAABdsds
+    http_proxy=http://proxy:8080
+    https_proxy=http://proxy:8080
+    no_proxy=localhost,127.0.0.1,::1
+    npm_config_http_proxy=http://proxy:8080
+    npm_config_https_proxy=http://proxy:8080
+
+  ┌─ PID1 environment — /proc/1/environ — full dump
+  [0;35m[NOTE][0m  Raw null-separated bytes read directly, then null→newline, then sorted.
+  [0;35m[NOTE][0m  PID1 env is set by the orchestrator at container launch — different from ours = injected.
+
+    $ cat /proc/1/environ | tr '\0' '\n' | sort
+    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    COREPACK_DEFAULT_TO_LATEST=0
+    COREPACK_ENABLE_AUTO_PIN=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_STRICT=0
+    DEBIAN_FRONTEND=noninteractive
+    ELECTRON_GET_USE_PROXY=true
+    GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+    HOME=/root
+    HOSTNAME=cb92b62ee437
+    HTTPS_PROXY=http://proxy:8080
+    HTTP_PROXY=http://proxy:8080
+    LANG=C.UTF-8
+    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    NO_PROXY=localhost,127.0.0.1,::1
+    NVM_DIR=/root/.nvm
+    PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    PHPENV_ROOT=/root/.phpenv
+    PIPX_BIN_DIR=/root/.local/bin
+    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    PYENV_ROOT=/root/.pyenv
+    REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+    SWIFTLY_BIN_DIR=/root/.swiftly/bin
+    UV_NO_PROGRESS=1
+    YARN_HTTPS_PROXY=http://proxy:8080
+    YARN_HTTP_PROXY=http://proxy:8080
+    http_proxy=http://proxy:8080
+    https_proxy=http://proxy:8080
+    no_proxy=localhost,127.0.0.1,::1
+    npm_config_http_proxy=http://proxy:8080
+    npm_config_https_proxy=http://proxy:8080
+  [0;31m[RISK][0m  PID1 /proc/1/environ is readable — init process environment exposed to us
+  [0;35m[NOTE][0m  Vars in PID1 NOT present in our env (injected at container start by orchestrator):
+      NO_PROXY=localhost,127.0.0.1,::1
+  [0;33m[WARN][0m  Injected/different in PID1: NO_PROXY=localhost,127.0.0.1,::1
+      PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  [0;33m[WARN][0m  Injected/different in PID1: PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+  [0;35m[NOTE][0m  Full annotation pass on PID1 env:
+    PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    HOSTNAME=cb92b62ee437
+    http_proxy=http://proxy:8080
+    HTTP_PROXY=http://proxy:8080
+    https_proxy=http://proxy:8080
+    HTTPS_PROXY=http://proxy:8080
+    no_proxy=localhost,127.0.0.1,::1
+    NO_PROXY=localhost,127.0.0.1,::1
+    YARN_HTTP_PROXY=http://proxy:8080
+    YARN_HTTPS_PROXY=http://proxy:8080
+    npm_config_http_proxy=http://proxy:8080
+    npm_config_https_proxy=http://proxy:8080
+    GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+  [0;31m[RISK][0m    ELECTRON_GET_USE_PROXY=true   ← value pattern of interest ('true')
+  [0;31m[RISK][0m    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+  [0;31m[RISK][0m    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+  [0;31m[RISK][0m    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+  [0;31m[RISK][0m    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    LANG=C.UTF-8
+    HOME=/root
+  [0;31m[RISK][0m    DEBIAN_FRONTEND=noninteractive   ← value pattern of interest ('noninteractive')
+    PYENV_ROOT=/root/.pyenv
+    PIPX_BIN_DIR=/root/.local/bin
+    UV_NO_PROGRESS=1
+    NVM_DIR=/root/.nvm
+    COREPACK_DEFAULT_TO_LATEST=0
+    COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+    COREPACK_ENABLE_AUTO_PIN=0
+    COREPACK_ENABLE_STRICT=0
+    SWIFTLY_BIN_DIR=/root/.swiftly/bin
+    PHPENV_ROOT=/root/.phpenv
+
+  ┌─ All visible process environments — full dump, deduplication against baseline
+  [0;35m[NOTE][0m  Every readable /proc/PID/environ is shown in full.
+  [0;35m[NOTE][0m  Lines already seen in our own env are marked [=baseline] to avoid noise.
+  [0;35m[NOTE][0m  Lines unique to a PID are the interesting ones — they were set specifically for that process.
+
+    $ for pid in /proc/[0-9]*/environ: read full env
+
+    ── PID 1  (tail -f /dev/null)
+      [=baseline] CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] COREPACK_DEFAULT_TO_LATEST=0
+      [=baseline] COREPACK_ENABLE_AUTO_PIN=0
+      [=baseline] COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+      [=baseline] COREPACK_ENABLE_STRICT=0
+      [=baseline] DEBIAN_FRONTEND=noninteractive
+      [=baseline] ELECTRON_GET_USE_PROXY=true
+      [=baseline] GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+      [=baseline] HOME=/root
+      [=baseline] HOSTNAME=cb92b62ee437
+      [=baseline] HTTPS_PROXY=http://proxy:8080
+      [=baseline] HTTP_PROXY=http://proxy:8080
+      [=baseline] LANG=C.UTF-8
+      [=baseline] NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [unique]    NO_PROXY=localhost,127.0.0.1,::1
+      [=baseline] NVM_DIR=/root/.nvm
+      [unique]    PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] PHPENV_ROOT=/root/.phpenv
+      [=baseline] PIPX_BIN_DIR=/root/.local/bin
+      [=baseline] PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] PYENV_ROOT=/root/.pyenv
+      [=baseline] REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SWIFTLY_BIN_DIR=/root/.swiftly/bin
+      [=baseline] UV_NO_PROGRESS=1
+      [=baseline] YARN_HTTPS_PROXY=http://proxy:8080
+      [=baseline] YARN_HTTP_PROXY=http://proxy:8080
+      [=baseline] http_proxy=http://proxy:8080
+      [=baseline] https_proxy=http://proxy:8080
+      [=baseline] no_proxy=localhost,127.0.0.1,::1
+      [=baseline] npm_config_http_proxy=http://proxy:8080
+      [=baseline] npm_config_https_proxy=http://proxy:8080
+
+    ── PID 3179  ()
+      (all vars match baseline — nothing unique for this PID)
+
+    ── PID 4420  ()
+      (all vars match baseline — nothing unique for this PID)
+
+    ── PID 6588  ()
+      (all vars match baseline — nothing unique for this PID)
+
+    ── PID 10731  (/opt/codex/bin/codex app-server)
+      [=baseline] CODEX_HOME=/opt/codex
+      [=baseline] CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent
+      [=baseline] CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] COREPACK_DEFAULT_TO_LATEST=0
+      [=baseline] COREPACK_ENABLE_AUTO_PIN=0
+      [=baseline] COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+      [=baseline] COREPACK_ENABLE_STRICT=0
+      [=baseline] DEBIAN_FRONTEND=noninteractive
+      [=baseline] ELECTRON_GET_USE_PROXY=true
+      [=baseline] GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+      [=baseline] HOME=/root
+      [=baseline] HOSTNAME=cb92b62ee437
+      [=baseline] HTTPS_PROXY=http://proxy:8080
+      [=baseline] HTTP_PROXY=http://proxy:8080
+      [=baseline] LANG=C.UTF-8
+      [=baseline] NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] NO_PROXY=browser
+      [=baseline] NVM_DIR=/root/.nvm
+      [=baseline] OPENAI_BASE_URL=https://api.openai.com:18080/
+      [unique]    PATH=/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] PHPENV_ROOT=/root/.phpenv
+      [=baseline] PIPX_BIN_DIR=/root/.local/bin
+      [=baseline] PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] PYENV_ROOT=/root/.pyenv
+      [=baseline] REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SWIFTLY_BIN_DIR=/root/.swiftly/bin
+      [=baseline] TERM=dumb
+      [=baseline] UV_NO_PROGRESS=1
+      [=baseline] YARN_HTTPS_PROXY=http://proxy:8080
+      [=baseline] YARN_HTTP_PROXY=http://proxy:8080
+      [=baseline] http_proxy=http://proxy:8080
+      [=baseline] https_proxy=http://proxy:8080
+      [=baseline] no_proxy=localhost,127.0.0.1,::1
+      [=baseline] npm_config_http_proxy=http://proxy:8080
+      [=baseline] npm_config_https_proxy=http://proxy:8080
+
+    ── PID 10766  (/opt/codex/mcp/.venv/bin/python /opt/codex/mcp/make_pr.py --transport stdio)
+      [=baseline] HOME=/root
+      [=baseline] LANG=C.UTF-8
+      [unique]    PATH=/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/root/.local/share/mise/shims:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] TERM=dumb
+
+    ── PID 11135  (/bin/bash -c mkdir -p logs && python3 container_audit.py -o logs/audit_full_late)
+      [=baseline] CODEX_CI=1
+      [=baseline] CODEX_ENV_BUN_VERSION=1.2.14
+      [=baseline] CODEX_ENV_GO_VERSION=1.24.3
+      [=baseline] CODEX_ENV_JAVA_VERSION=21
+      [=baseline] CODEX_ENV_NODE_VERSION=20
+      [=baseline] CODEX_ENV_PHP_VERSION=8.4
+      [=baseline] CODEX_ENV_PYTHON_VERSION=3.12
+      [=baseline] CODEX_ENV_RUBY_VERSION=3.4.4
+      [=baseline] CODEX_ENV_RUST_VERSION=1.89.0
+      [=baseline] CODEX_ENV_SWIFT_VERSION=6.1
+      [=baseline] CODEX_HOME=/opt/codex
+      [=baseline] CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent
+      [=baseline] CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] CODEX_THREAD_ID=019db3e2-1125-72e3-979d-0475cafcccee
+      [=baseline] COLORTERM=
+      [=baseline] COREPACK_DEFAULT_TO_LATEST=0
+      [=baseline] COREPACK_ENABLE_AUTO_PIN=0
+      [=baseline] COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+      [=baseline] COREPACK_ENABLE_STRICT=0
+      [=baseline] DEBIAN_FRONTEND=noninteractive
+      [=baseline] ELECTRON_GET_USE_PROXY=true
+      [=baseline] GH_PAGER=cat
+      [=baseline] GIT_PAGER=cat
+      [=baseline] GOBIN=/root/.local/share/mise/installs/go/1.24.3/bin
+      [=baseline] GOROOT=/root/.local/share/mise/installs/go/1.24.3
+      [=baseline] GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+      [=baseline] HOME=/root
+      [=baseline] HOSTNAME=cb92b62ee437
+      [=baseline] HTTPS_PROXY=http://proxy:8080
+      [=baseline] HTTP_PROXY=http://proxy:8080
+      [=baseline] JAVA_HOME=/root/.local/share/mise/installs/java/21.0.2
+      [=baseline] LANG=C.UTF-8
+      [=baseline] LC_ALL=C.UTF-8
+      [=baseline] LC_CTYPE=C.UTF-8
+      [=baseline] MISE_SHELL=bash
+      [=baseline] MIX_ARCHIVES=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/archives
+      [=baseline] MIX_HOME=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix
+      [=baseline] NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] NO_COLOR=1
+      [=baseline] NO_PROXY=browser
+      [=baseline] NVM_BIN=/root/.nvm/versions/node/v20.19.6/bin
+      [=baseline] NVM_CD_FLAGS=
+      [=baseline] NVM_DIR=/root/.nvm
+      [=baseline] NVM_INC=/root/.nvm/versions/node/v20.19.6/include/node
+      [=baseline] OPENAI_BASE_URL=https://api.openai.com:18080/
+      [=baseline] OPENAI_CLUSTER=applied-caas6
+      [=baseline] PAGER=cat
+  [0;31m[RISK][0m    PID 11135 unique var: PATH=/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin  ← value pattern ('/root/.phpenv/shims:/root/.cargo/bin:/ro')
+      [=baseline] PHPENV_ROOT=/root/.phpenv
+      [=baseline] PIPX_BIN_DIR=/root/.local/bin
+      [=baseline] PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] PWD=/workspace/Cuuper22
+      [=baseline] PYENV_ROOT=/root/.pyenv
+      [=baseline] PYENV_SHELL=bash
+      [=baseline] REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [unique]    SHLVL=0
+      [=baseline] SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SWIFTLY_BIN_DIR=/root/.swiftly/bin
+      [=baseline] SWIFTLY_HOME_DIR=/root/.local/share/swiftly
+      [=baseline] SWIFTLY_TOOLCHAINS_DIR=/root/.local/share/swiftly/toolchains
+      [=baseline] TERM=dumb
+      [=baseline] UV_NO_PROGRESS=1
+      [=baseline] YARN_HTTPS_PROXY=http://proxy:8080
+      [=baseline] YARN_HTTP_PROXY=http://proxy:8080
+      [=baseline] __MISE_DIFF=eAFqXpyfk9KwOC+1vHWpu7+Tp99NPf2i/PwSfb2c/OTEHP3ijMSiVP3czOJU/cy84pLEnJxi/fR8fUM9IxM9Y/2kzLxl7v5B/v4hN7WI17bSyzHMMd7D39f1pg5BXVmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtqQgsSRj1k19giYkleaBAk7P0AQUcDeNCGpILcpJzEvXNzLXM9QzAushMXJuhhC0Iz0fZEdypm5OZl6JvpGeoZ6ZPoqYLlgMJF1aoZuYm2JmctOBsKlFiSk5qfoWeoagZJIO5ulCeUmZeTcNCJqAFO+AgX3uSlBHbmJZap6+sZ6lnqGBfmJBYnJGqi5YTBcqBrKYcCwVlSZV6hvrmehBYsmSoL1YkxnILkpSaGpxclFmQUkxAAc+SC4
+      [=baseline] __MISE_ORIG_PATH=/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] __MISE_SESSION=eAHqWJOTn5iSmhJfkp+fUzxhHZSXnJ+XlplePHGfflF+fom+HoSvn5tZnKoPYeuV5OfmrIGw4wsSSzKKJyxOzStrXeru7+Tpd1MPqjEnPzkxR784I7EoFaI7M6+4JDEnp1g/PV/fUM/IRM9YPykzb5m7f5C/f8hNLeK1rfRyDHOM9/D3db2pQ1AXYFmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtjwxJzOxOLW4YXFKZtFm/fL8ouzigsTkVH3n0tKC1CIjozWpeWXxZYlF8RmJxRkbkowtDVPTTA2SzA2TDU0tzNbmJJakFpfElxakJJakHhFggAPGuZtfcb0AAABdsds
+      [=baseline] http_proxy=http://proxy:8080
+      [=baseline] https_proxy=http://proxy:8080
+      [=baseline] no_proxy=localhost,127.0.0.1,::1
+      [=baseline] npm_config_http_proxy=http://proxy:8080
+      [=baseline] npm_config_https_proxy=http://proxy:8080
+
+    ── PID 11137  (/root/.pyenv/versions/3.12.12/bin/python3 container_audit.py -o logs/audit_full_)
+      [=baseline] CODEX_CI=1
+      [=baseline] CODEX_ENV_BUN_VERSION=1.2.14
+      [=baseline] CODEX_ENV_GO_VERSION=1.24.3
+      [=baseline] CODEX_ENV_JAVA_VERSION=21
+      [=baseline] CODEX_ENV_NODE_VERSION=20
+      [=baseline] CODEX_ENV_PHP_VERSION=8.4
+      [=baseline] CODEX_ENV_PYTHON_VERSION=3.12
+      [=baseline] CODEX_ENV_RUBY_VERSION=3.4.4
+      [=baseline] CODEX_ENV_RUST_VERSION=1.89.0
+      [=baseline] CODEX_ENV_SWIFT_VERSION=6.1
+      [=baseline] CODEX_HOME=/opt/codex
+      [=baseline] CODEX_INTERNAL_ORIGINATOR_OVERRIDE=codex_web_agent
+      [=baseline] CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] CODEX_THREAD_ID=019db3e2-1125-72e3-979d-0475cafcccee
+      [=baseline] COLORTERM=
+      [=baseline] COREPACK_DEFAULT_TO_LATEST=0
+      [=baseline] COREPACK_ENABLE_AUTO_PIN=0
+      [=baseline] COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+      [=baseline] COREPACK_ENABLE_STRICT=0
+      [=baseline] DEBIAN_FRONTEND=noninteractive
+      [=baseline] ELECTRON_GET_USE_PROXY=true
+      [=baseline] GH_PAGER=cat
+      [=baseline] GIT_PAGER=cat
+      [=baseline] GOBIN=/root/.local/share/mise/installs/go/1.24.3/bin
+      [=baseline] GOROOT=/root/.local/share/mise/installs/go/1.24.3
+      [=baseline] GRADLE_OPTS=-Dhttp.proxyHost=proxy -Dhttp.proxyPort=8080 -Dhttps.proxyHost=proxy -Dhttps.proxyPort=8080
+      [=baseline] HOME=/root
+      [=baseline] HOSTNAME=cb92b62ee437
+      [=baseline] HTTPS_PROXY=http://proxy:8080
+      [=baseline] HTTP_PROXY=http://proxy:8080
+      [=baseline] JAVA_HOME=/root/.local/share/mise/installs/java/21.0.2
+      [=baseline] LANG=C.UTF-8
+      [=baseline] LC_ALL=C.UTF-8
+      [=baseline] LC_CTYPE=C.UTF-8
+      [=baseline] MISE_SHELL=bash
+      [=baseline] MIX_ARCHIVES=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/archives
+      [=baseline] MIX_HOME=/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix
+      [=baseline] NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] NO_COLOR=1
+      [=baseline] NO_PROXY=browser
+      [=baseline] NVM_BIN=/root/.nvm/versions/node/v20.19.6/bin
+      [=baseline] NVM_CD_FLAGS=
+      [=baseline] NVM_DIR=/root/.nvm
+      [=baseline] NVM_INC=/root/.nvm/versions/node/v20.19.6/include/node
+      [=baseline] OPENAI_BASE_URL=https://api.openai.com:18080/
+      [=baseline] OPENAI_CLUSTER=applied-caas6
+      [=baseline] PAGER=cat
+      [=baseline] PATH=/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root/.pyenv/plugins/python-build/bin:/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] PHPENV_ROOT=/root/.phpenv
+      [=baseline] PIPX_BIN_DIR=/root/.local/bin
+      [=baseline] PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] PWD=/workspace/Cuuper22
+      [=baseline] PYENV_DIR=/workspace/Cuuper22
+      [=baseline] PYENV_HOOK_PATH=/root/.pyenv/pyenv.d:/usr/etc/pyenv.d:/usr/local/etc/pyenv.d:/etc/pyenv.d:/usr/lib/pyenv/hooks
+      [=baseline] PYENV_ROOT=/root/.pyenv
+      [=baseline] PYENV_SHELL=bash
+      [=baseline] PYENV_VERSION=3.12.12
+      [=baseline] REQUESTS_CA_BUNDLE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SHLVL=1
+      [=baseline] SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt
+      [=baseline] SWIFTLY_BIN_DIR=/root/.swiftly/bin
+      [=baseline] SWIFTLY_HOME_DIR=/root/.local/share/swiftly
+      [=baseline] SWIFTLY_TOOLCHAINS_DIR=/root/.local/share/swiftly/toolchains
+      [=baseline] TERM=dumb
+      [=baseline] UV_NO_PROGRESS=1
+      [=baseline] YARN_HTTPS_PROXY=http://proxy:8080
+      [=baseline] YARN_HTTP_PROXY=http://proxy:8080
+      [=baseline] __MISE_DIFF=eAFqXpyfk9KwOC+1vHWpu7+Tp99NPf2i/PwSfb2c/OTEHP3ijMSiVP3czOJU/cy84pLEnJxi/fR8fUM9IxM9Y/2kzLxl7v5B/v4hN7WI17bSyzHMMd7D39f1pg5BXVmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtqQgsSRj1k19giYkleaBAk7P0AQUcDeNCGpILcpJzEvXNzLXM9QzAushMXJuhhC0Iz0fZEdypm5OZl6JvpGeoZ6ZPoqYLlgMJF1aoZuYm2JmctOBsKlFiSk5qfoWeoagZJIO5ulCeUmZeTcNCJqAFO+AgX3uSlBHbmJZap6+sZ6lnqGBfmJBYnJGqi5YTBcqBrKYcCwVlSZV6hvrmehBYsmSoL1YkxnILkpSaGpxclFmQUkxAAc+SC4
+      [=baseline] __MISE_ORIG_PATH=/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+      [=baseline] __MISE_SESSION=eAHqWJOTn5iSmhJfkp+fUzxhHZSXnJ+XlplePHGfflF+fom+HoSvn5tZnKoPYeuV5OfmrIGw4wsSSzKKJyxOzStrXeru7+Tpd1MPqjEnPzkxR784I7EoFaI7M6+4JDEnp1g/PV/fUM/IRM9YPykzb5m7f5C/f8hNLeK1rfRyDHOM9/D3db2pQ1AXYFmJZYn6RoZ6BnpGa3w9I+Idg5w9PMNcg286E9SampNZkVmkb6hnaKFnrJtfUqBrZK6vl5tZoZ9YlJyRWZZavAJkItghVuSbtjwxJzOxOLW4YXFKZtFm/fL8ouzigsTkVH3n0tKC1CIjozWpeWXxZYlF8RmJxRkbkowtDVPTTA2SzA2TDU0tzNbmJJakFpfElxakJJakHhFggAPGuZtfcb0AAABdsds
+      [=baseline] http_proxy=http://proxy:8080
+      [=baseline] https_proxy=http://proxy:8080
+      [=baseline] no_proxy=localhost,127.0.0.1,::1
+      [=baseline] npm_config_http_proxy=http://proxy:8080
+      [=baseline] npm_config_https_proxy=http://proxy:8080
+      (all vars match baseline — nothing unique for this PID)
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  10. SENSITIVE FILES AND CREDENTIALS                           ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ Kubernetes service account token
+  [0;32m[PASS][0m  No Kubernetes service account token found
+
+  ┌─ Cloud IMDS — 169.254.169.254
+  [0;35m[NOTE][0m  Cloud metadata services at 169.254.169.254 return temporary cloud credentials.
+  [0;35m[NOTE][0m  AWS: /latest/meta-data/iam/security-credentials/  GCP: /v1/instance/service-accounts/
+  [0;32m[PASS][0m  169.254.169.254 not reachable — no cloud IMDS access
+
+  ┌─ Credential files — existence, permissions, and FULL CONTENTS
+  [0;35m[NOTE][0m  Every readable file is shown in full (up to 4KB). This is the point: see what's actually there.
+  [0;31m[RISK][0m  READABLE: /root/.gitconfig  (0644  uid=0  gid=0  size=105)
+
+    $ cat /root/.gitconfig
+    [core]
+    pager = cat
+    
+    [user]
+    name = Codex
+    email = codex@openai.com
+    [safe]
+    	directory = /workspace/Cuuper22
+
+    [directory] /etc/ssl/private
+
+    $ ls -la /etc/ssl/private 2>/dev/null | head -20
+    total 8
+    drwx------ 2 root root 4096 Sep 18  2025 .
+    drwxr-xr-x 4 root root 4096 Jan 12 17:40 ..
+
+  ┌─ Docker socket
+  [0;32m[PASS][0m  Docker socket not mounted
+
+  ┌─ SSH authorized_keys across all user home directories
+
+    $ awk -F: '{print $6}' /etc/passwd | sort -u | while read home; do f="$home/.ssh/authorized_keys"; [ -f "$f" ] && echo "=== $f ===" && cat "$f" 2>/dev/null; done 2>/dev/null || echo 'none found'
+    none found
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  11. PROCESSES, IPC, AND COVERT CHANNELS                       ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ Process list — full view
+  [0;35m[NOTE][0m  Shows all processes visible in this PID namespace. Unexpected entries = monitoring/backdoors.
+
+    $ ps auxf 2>/dev/null || ps -ef 2>/dev/null || echo 'ps not available'
+    USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+    root       10731  3.8  0.3 1172848 71244 ?       Sl   06:39   0:02 /opt/codex/bin/codex app-server
+    root       10766  1.5  0.2 210064 54332 ?        Sl   06:39   0:00  \_ /opt/codex/mcp/.venv/bin/python /opt/codex/mcp/make_pr.py --transport stdio
+    root       11135  1.0  0.0   4756  3716 ?        Ss   06:40   0:00  \_ /bin/bash -c mkdir -p logs && python3 container_audit.py -o logs/audit_full_latest.log > /tmp/run_full_stdout.log && python3 container_audit.py -s 14 -o logs/audit_section14_latest.log > /tmp/run_s14_stdout.log
+    root       11137  5.8  0.1  23020 19216 ?        S    06:40   0:00      \_ /root/.pyenv/versions/3.12.12/bin/python3 container_audit.py -o logs/audit_full_latest.log
+    root       11437  0.0  0.0   2804  1976 ?        S    06:40   0:00          \_ /bin/sh -c ps auxf 2>/dev/null || ps -ef 2>/dev/null || echo 'ps not available'
+    root       11438  0.0  0.0   8336  4328 ?        R    06:40   0:00              \_ ps auxf
+    root           1  0.0  0.0   3156  1936 ?        S    06:29   0:00 tail -f /dev/null
+    root        3179  0.0  0.0      0     0 ?        Zs   06:30   0:00 [go] <defunct>
+    root        4420  0.1  0.0      0     0 ?        Z    06:30   0:01 [python] <defunct>
+    root        6588  0.2  0.0      0     0 ?        Z    06:33   0:00 [python] <defunct>
+
+  ┌─ /proc/[pid] inventory — status and cmdline for every visible PID
+  [0;35m[NOTE][0m  We read /proc/$pid/status and cmdline for every PID we can see.
+
+    $ ls /proc/ | grep -E '^[0-9]+$'
+    Visible PIDs: 1 3179 4420 6588 10731 10766 11135 11137
+
+    PID 1    : tail                  uid=0      state=S (sle  cmd=tail -f /dev/null
+    PID 3179 : go                    uid=0      state=Z (zom  cmd=
+    PID 4420 : python                uid=0      state=Z (zom  cmd=
+    PID 6588 : python                uid=0      state=Z (zom  cmd=
+    PID 10731: codex                 uid=0      state=S (sle  cmd=/opt/codex/bin/codex app-server
+    PID 10766: python                uid=0      state=S (sle  cmd=/opt/codex/mcp/.venv/bin/python /opt/codex/mcp/make_pr.py --transport stdio
+    PID 11135: bash                  uid=0      state=S (sle  cmd=/bin/bash -c mkdir -p logs && python3 container_audit.py -o logs/audit_full_late
+    PID 11137: python3               uid=0      state=R (run  cmd=/root/.pyenv/versions/3.12.12/bin/python3 container_audit.py -o logs/audit_full_
+
+  ┌─ Zombie processes
+  [0;35m[NOTE][0m  State 'Z' = zombie. Process exited but parent hasn't called wait(). Large count = bug.
+
+    $ ps aux 2>/dev/null | awk 'NR==1 || $8 ~ /Z/' || echo 'ps not available'
+    USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND
+    root        3179  0.0  0.0      0     0 ?        Zs   06:30   0:00 [go] <defunct>
+    root        4420  0.1  0.0      0     0 ?        Z    06:30   0:01 [python] <defunct>
+    root        6588  0.2  0.0      0     0 ?        Z    06:33   0:00 [python] <defunct>
+
+  ┌─ Named pipes (FIFOs) — potential covert IPC channels
+  [0;35m[NOTE][0m  FIFOs in /tmp or /run can be used as covert communication channels between processes.
+
+    $ find /tmp /var/tmp /run /home /root -type p 2>/dev/null | xargs -r ls -la 2>/dev/null || echo 'none'
+    (no output)
+
+  ┌─ System V IPC — shared memory, semaphores, message queues
+  [0;35m[NOTE][0m  Processes in the same IPC namespace can communicate via these. Show what's active.
+
+    $ cat /proc/sysvipc/shm
+    key      shmid perms                  size  cpid  lpid nattch   uid   gid  cuid  cgid      atime      dtime      ctime                   rss                  swap
+
+    $ cat /proc/sysvipc/sem
+    key      semid perms      nsems   uid   gid  cuid  cgid      otime      ctime
+
+    $ cat /proc/sysvipc/msg
+    key      msqid perms      cbytes       qnum lspid lrpid   uid   gid  cuid  cgid      stime      rtime      ctime
+
+  ┌─ POSIX shared memory (/dev/shm)
+
+    $ ls -laR /dev/shm 2>/dev/null || echo 'empty or not mounted'
+    /dev/shm:
+    total 0
+    drwxrwxrwt 2 root root  40 Apr 22 06:29 .
+    drwxr-xr-x 5 root root 320 Apr 22 06:29 ..
+
+  ┌─ Open file descriptors for PID 1
+  [0;35m[NOTE][0m  Shows what files/sockets/pipes the init process has open.
+
+    $ ls -la /proc/1/fd 2>/dev/null | head -40 || echo 'permission denied'
+    total 0
+    dr-x------ 2 root root  4 Apr 22 06:29 .
+    dr-xr-xr-x 9 root root  0 Apr 22 06:29 ..
+    lr-x------ 1 root root 64 Apr 22 06:30 0 -> pipe:[1405]
+    l-wx------ 1 root root 64 Apr 22 06:30 1 -> pipe:[1406]
+    l-wx------ 1 root root 64 Apr 22 06:30 2 -> pipe:[1407]
+    lr-x------ 1 root root 64 Apr 22 06:30 3 -> /dev/null
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  12. LATERAL MOVEMENT SURFACE                                  ║
+╚══════════════════════════════════════════════════════════════╝
+
+  ┌─ Gateway reachability — common service ports
+  [0;35m[NOTE][0m  The gateway is the first hop. Open ports there = internal infrastructure we can reach.
+  [0;33m[WARN][0m  Could not determine gateway — skipping gateway probe
+
+  ┌─ Subnet neighbour scan (±10 IPs around gateway, ports 22/80/443/8080)
+  [0;35m[NOTE][0m  TCP connect only — no raw sockets needed. Reveals other containers on the same network.
+  [0;36m[INFO][0m  Skipping neighbour scan — no gateway
+
+  ┌─ Internal service name resolution
+  [0;35m[NOTE][0m  Resolving common internal names. Successful resolution reveals internal network topology.
+  [0;32m[PASS][0m  No DNS: kubernetes.default.svc.cluster.local
+  [0;32m[PASS][0m  No DNS: kube-dns.kube-system.svc.cluster.local
+  [0;32m[PASS][0m  No DNS: consul
+  [0;32m[PASS][0m  No DNS: vault
+  [0;32m[PASS][0m  No DNS: postgres
+  [0;32m[PASS][0m  No DNS: redis
+  [0;32m[PASS][0m  No DNS: elasticsearch
+  [0;32m[PASS][0m  No DNS: kafka
+  [0;32m[PASS][0m  No DNS: rabbitmq
+  [0;32m[PASS][0m  No DNS: registry.internal
+  [0;32m[PASS][0m  No DNS: docker.internal
+
+  ┌─ rsync daemon on :873
+  [0;35m[NOTE][0m  Unauthenticated rsync modules allow pulling any file or pushing arbitrary payloads.
+  [0;32m[PASS][0m  No rsync daemon on :873
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  13. TOOL INVENTORY                                            ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Every present tool is a capability. We show path and version for each found binary.
+  [0;35m[NOTE][0m  Risk levels: CRIT=direct system/cloud access, HIGH=exfil/pivot/debug, MED=support, LOW=minor
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/nc
+    (no output)
+  [0;33m[HIGH][0m  nc           → /usr/bin/nc                         
+    /usr/bin/netcat
+    (no output)
+  [0;33m[HIGH][0m  netcat       → /usr/bin/netcat                     
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/curl
+    curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.13 zlib/1.3 brotli/1.1.0 zstd/1.5.5 libidn2/2.3.7 libpsl/0.21.2 (+libidn2/2.3.7) libssh/0.10.6/openssl/zlib nghttp2/1.59.0 librtmp/2.3 OpenLDAP/2.6.7
+  [0;33m[HIGH][0m  curl         → /usr/bin/curl                       curl 8.5.0 (x86_64-pc-linux-gnu) libcurl/8.5.0 OpenSSL/3.0.1
+    /usr/bin/wget
+    GNU Wget 1.21.4 built on linux-gnu.
+  [0;33m[HIGH][0m  wget         → /usr/bin/wget                       GNU Wget 1.21.4 built on linux-gnu.
+    /root/.pyenv/versions/3.12.12/bin/python3
+    Python 3.12.12
+  [0;33m[HIGH][0m  python3      → /root/.pyenv/versions/3.12.12/bin/python3 Python 3.12.12
+    /root/.pyenv/versions/3.12.12/bin/python
+    Python 3.12.12
+  [0;33m[HIGH][0m  python       → /root/.pyenv/versions/3.12.12/bin/python Python 3.12.12
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/perl
+    (no output)
+  [0;33m[HIGH][0m  perl         → /usr/bin/perl                       
+    /root/.local/share/mise/installs/ruby/3.4.4/bin/ruby
+    ruby 3.4.4 (2025-05-14 revision a38531fd3f) +PRISM [x86_64-linux]
+  [0;33m[HIGH][0m  ruby         → /root/.local/share/mise/installs/ruby/3.4.4/bin/ruby ruby 3.4.4 (2025-05-14 revision a38531fd3f) +PRISM [x86_64-l
+    /root/.nvm/versions/node/v20.19.6/bin/node
+    v20.19.6
+  [0;33m[HIGH][0m  node         → /root/.nvm/versions/node/v20.19.6/bin/node v20.19.6
+    /root/.nvm/versions/node/v20.19.6/bin/npm
+    11.4.2
+  [0;36m[MED ][0m  npm          → /root/.nvm/versions/node/v20.19.6/bin/npm 11.4.2
+    /root/.pyenv/versions/3.12.12/bin/pip3
+    pip 25.3 from /root/.pyenv/versions/3.12.12/lib/python3.12/site-packages/pip (python 3.12)
+  [0;36m[MED ][0m  pip3         → /root/.pyenv/versions/3.12.12/bin/pip3 pip 25.3 from /root/.pyenv/versions/3.12.12/lib/python3.12/s
+    /usr/bin/bash
+    GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+  [0;36m[MED ][0m  bash         → /usr/bin/bash                       GNU bash, version 5.2.21(1)-release (x86_64-pc-linux-gnu)
+    /usr/bin/sh
+    (no output)
+  [0;36m[MED ][0m  sh           → /usr/bin/sh                         
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/ssh
+    (no output)
+  [0;33m[HIGH][0m  ssh          → /usr/bin/ssh                        
+    /usr/bin/scp
+    (no output)
+  [0;33m[HIGH][0m  scp          → /usr/bin/scp                        
+    /usr/bin/sftp
+    (no output)
+  [0;33m[HIGH][0m  sftp         → /usr/bin/sftp                       
+    /usr/bin/git
+    git version 2.43.0
+  [0;36m[MED ][0m  git          → /usr/bin/git                        git version 2.43.0
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/openssl
+    (no output)
+  [0;36m[MED ][0m  openssl      → /usr/bin/openssl                    
+    /usr/bin/gpg
+    gpg (GnuPG) 2.4.4
+  [0;36m[MED ][0m  gpg          → /usr/bin/gpg                        gpg (GnuPG) 2.4.4
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/base64
+    base64 (GNU coreutils) 9.4
+  [0;32m[LOW ][0m  base64       → /usr/bin/base64                     base64 (GNU coreutils) 9.4
+    (no output)
+    [exit 127 — no output]
+    /usr/bin/od
+    od (GNU coreutils) 9.4
+  [0;32m[LOW ][0m  od           → /usr/bin/od                         od (GNU coreutils) 9.4
+    /usr/bin/jq
+    jq-1.7
+  [0;32m[LOW ][0m  jq           → /usr/bin/jq                         jq-1.7
+    /usr/bin/rsync
+    rsync  version 3.2.7  protocol version 31
+  [0;36m[MED ][0m  rsync        → /usr/bin/rsync                      rsync  version 3.2.7  protocol version 31
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+    (no output)
+    [exit 127 — no output]
+
+  [0;35m[NOTE][0m  Flagging HIGH and CRIT tools as WARN findings:
+  [0;33m[WARN][0m  nc: netcat — TCP listeners, file transfer, reverse shells
+  [0;33m[WARN][0m  netcat: netcat alias
+  [0;33m[WARN][0m  curl: HTTP client — exfil data, download payloads
+  [0;33m[WARN][0m  wget: HTTP downloader
+  [0;33m[WARN][0m  python3: full scripting — replaces all of the above
+  [0;33m[WARN][0m  python: python alias
+  [0;33m[WARN][0m  perl: full scripting language
+  [0;33m[WARN][0m  ruby: full scripting language
+  [0;33m[WARN][0m  node: Node.js — full network scripting
+  [0;33m[WARN][0m  ssh: SSH client — lateral movement
+  [0;33m[WARN][0m  scp: secure copy — exfiltration
+  [0;33m[WARN][0m  sftp: SFTP client
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  14. ORCHESTRATION, SECRETS, AND ESCAPE ARTIFACTS              ║
+╚══════════════════════════════════════════════════════════════╝
+  [0;35m[NOTE][0m  Looks for high-impact artifacts used in cloud/container breakouts and credential theft.
+
+  ┌─ Container engine control sockets
+  [0;35m[NOTE][0m  Writable Docker/Podman/containerd sockets usually imply host-level control.
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/docker.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/docker.sock
+  [0;32m[PASS][0m  Not present: /proc/1/root/var/run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /run/docker.sock
+  [0;32m[PASS][0m  Not present: /run/podman/podman.sock
+  [0;32m[PASS][0m  Not present: /var/run/containerd/containerd.sock
+  [0;32m[PASS][0m  Not present: /var/run/docker.sock
+  [0;32m[PASS][0m  Not present: /var/run/podman/podman.sock
+
+  ┌─ Kubernetes service account and pod identity artifacts
+  [0;35m[NOTE][0m  Mounted service account tokens can grant API access and enable lateral movement.
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/token
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/namespace
+  [0;32m[PASS][0m  Not present: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+  [0;36m[INFO][0m  No Kubernetes service account files detected
+
+  ┌─ Generic mounted secrets and cloud credentials
+  [0;35m[NOTE][0m  Checks common secret mount points and cloud credential file locations.
+  [0;32m[PASS][0m  No common mounted secret or cloud credential files found
+
+  ┌─ Cloud metadata service reachability
+  [0;35m[NOTE][0m  If metadata endpoints are reachable, temporary cloud credentials may be harvestable.
+    /usr/bin/curl
+
+    $ curl -sS -m 2 -o /dev/null -w '%{http_code}' -X PUT -H 'X-aws-ec2-metadata-token-ttl-seconds: 60' http://169.254.169.254/latest/api/token
+    503
+  [0;36m[INFO][0m  AWS IMDSv2 token endpoint responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -o /dev/null -w '%{http_code}' http://169.254.169.254/latest/meta-data/
+    503
+  [0;36m[INFO][0m  AWS IMDSv1 root responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -H 'Metadata-Flavor: Google' -o /dev/null -w '%{http_code}' http://169.254.169.254/computeMetadata/v1/
+    503
+  [0;36m[INFO][0m  GCP metadata responded with non-auth status HTTP 503
+
+    $ curl -sS -m 2 -H Metadata:true -o /dev/null -w '%{http_code}' 'http://169.254.169.254/metadata/instance?api-version=2021-02-01'
+    503
+  [0;36m[INFO][0m  Azure metadata responded with non-auth status HTTP 503
+
+  ┌─ cgroup release_agent and notify_on_release checks
+  [0;35m[NOTE][0m  Misconfigured cgroup release_agent can be abused for host command execution.
+  [0;32m[PASS][0m  Not present: /sys/fs/cgroup/release_agent
+  [0;32m[PASS][0m  Not present: /sys/fs/cgroup/notify_on_release
+
+  ┌─ Sensitive runtime files commonly harvested by attackers
+  [0;32m[PASS][0m  Not present: /root/.kube/config
+  [0;32m[PASS][0m  Not present: /etc/kubernetes/kubelet.conf
+  [0;32m[PASS][0m  Not present: /etc/kubernetes/admin.conf
+  [0;32m[PASS][0m  Not present: /var/lib/kubelet/kubeconfig
+
+
+╔══════════════════════════════════════════════════════════════╗
+║  AUDIT COMPLETE — SUMMARY                                      ║
+╚══════════════════════════════════════════════════════════════╝
+
+  [0;31m[RISK][0m    68   confirmed attack surface — act on these
+  [0;33m[WARN][0m    53   notable — may be exploitable depending on context
+  [0;32m[PASS][0m    49   checks confirmed secure
+  [0;36m[INFO][0m    17   informational notes
+
+
+  [1mFull RISK finding list:[0m
+    [0;31m●[0m  Running as root (uid=0): can read all files, write to any writable mount, exploit misconfigs
+    [0;31m●[0m  no_new_privileges=0 — SUID binaries can escalate to their owner's uid (usually root)
+    [0;31m●[0m  Seccomp=0 — all kernel syscalls available, no syscall-level containment
+    [0;31m●[0m  Dangerous cap ACTIVE: CAP_SETGID — setgid — become any group
+    [0;31m●[0m  Dangerous cap ACTIVE: CAP_SETUID — setuid — become any user
+    [0;31m●[0m  Dangerous cap ACTIVE: CAP_SETPCAP — setpcap — grant capabilities to other processes
+    [0;31m●[0m  Dangerous cap ACTIVE: CAP_NET_RAW — raw sockets — packet injection and sniffing
+    [0;31m●[0m  Dangerous cap ACTIVE: CAP_SYS_CHROOT — chroot — escape jail or create new filesystem root
+    [0;31m●[0m  SUID known-GTFObins: /usr/bin/chsh  perms=0o104755  owner_uid=0
+    [0;31m●[0m  SUID known-GTFObins: /usr/lib/openssh/ssh-keysign  perms=0o104755  owner_uid=0
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/versions/3.12.12/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/libexec
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/plugins/python-build/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.phpenv/shims
+    [0;31m●[0m  WRITABLE PATH dir: /root/.cargo/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.nvm/versions/node/v20.19.6/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/shims
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/bun/1.2.14/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/erlang/27.1.2/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/go/1.24.3/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/java/21.0.2/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/ruby/3.4.4/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin
+    [0;31m●[0m  WRITABLE PATH dir: /opt/codex/tmp/arg0/codex-arg0k5AE7P
+    [0;31m●[0m  WRITABLE PATH dir: /root/.phpenv/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.phpenv/shims
+    [0;31m●[0m  WRITABLE PATH dir: /root/.swiftly/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.local/bin
+    [0;31m●[0m  WRITABLE PATH dir: /root/.pyenv/bin
+    [0;31m●[0m  WRITABLE PATH dir: /usr/local/sbin
+    [0;31m●[0m  WRITABLE PATH dir: /usr/local/bin
+    [0;31m●[0m  WRITABLE PATH dir: /usr/sbin
+    [0;31m●[0m  WRITABLE PATH dir: /usr/bin
+    [0;31m●[0m  WRITABLE PATH dir: /sbin
+    [0;31m●[0m  WRITABLE PATH dir: /bin
+    [0;31m●[0m  WRITABLE cron script: /etc/cron.d/e2scrub_all
+    [0;31m●[0m  WRITABLE cron script: /etc/cron.daily/apt-compat
+    [0;31m●[0m  WRITABLE cron script: /etc/cron.daily/dpkg
+    [0;31m●[0m  WRITABLE: /etc/passwd  (0644  uid=0  gid=0  size=1069)
+    [0;31m●[0m  WRITABLE: /etc/shadow  (0640  uid=0  gid=42  size=581)
+    [0;31m●[0m  WRITABLE: /etc/sudoers  (0440  uid=0  gid=0  size=1800)
+    [0;31m●[0m  WRITABLE: /etc/sudoers.d  (0755  uid=0  gid=0  size=4096)
+    [0;31m●[0m  /etc/hosts is WRITABLE — DNS spoofing inside this container is possible
+    [0;31m●[0m    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    COLORTERM=   ← EMPTY VALUE — may mean unset secret or misconfigured blank
+    [0;31m●[0m    DEBIAN_FRONTEND=noninteractive   ← value pattern of interest ('noninteractive')
+    [0;31m●[0m    ELECTRON_GET_USE_PROXY=true   ← value pattern of interest ('true')
+    [0;31m●[0m    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    NVM_BIN=/root/.nvm/versions/node/v20.19.6/bin   ← value pattern of interest ('/root/.nvm/versions/node/v20.19.6/bin')
+    [0;31m●[0m    NVM_CD_FLAGS=   ← EMPTY VALUE — may mean unset secret or misconfigured blank
+    [0;31m●[0m    NVM_INC=/root/.nvm/versions/node/v20.19.6/include/node   ← value pattern of interest ('/root/.nvm/versions/node/v20.19.6/include/node')
+    [0;31m●[0m    PATH=/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root/.pyenv/plugins/python-build/bin:/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin   ← value pattern of interest ('/root/.pyenv/versions/3.12.12/bin:/root/.pyenv/libexec:/root')
+    [0;31m●[0m    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    PWD=/workspace/Cuuper22   ← key name pattern
+    [0;31m●[0m    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m  PID1 /proc/1/environ is readable — init process environment exposed to us
+    [0;31m●[0m    ELECTRON_GET_USE_PROXY=true   ← value pattern of interest ('true')
+    [0;31m●[0m    CODEX_PROXY_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    PIP_CERT=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    NODE_EXTRA_CA_CERTS=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    SSL_CERT_FILE=/usr/local/share/ca-certificates/envoy-mitmproxy-ca-cert.crt   ← key name pattern
+    [0;31m●[0m    DEBIAN_FRONTEND=noninteractive   ← value pattern of interest ('noninteractive')
+    [0;31m●[0m    PID 11135 unique var: PATH=/root/.phpenv/shims:/root/.cargo/bin:/root/.nvm/versions/node/v20.19.6/bin:/root/.pyenv/shims:/root/.pyenv/bin:/root/.local/share/mise/installs/bun/1.2.14/bin:/root/.local/share/mise/installs/erlang/27.1.2/bin:/root/.local/share/mise/installs/go/1.24.3/bin:/root/.local/share/mise/installs/golangci-lint/2.1.6/golangci-lint-2.1.6-linux-amd64:/root/.local/share/mise/installs/gradle/8.14.3/gradle-8.14.3/bin:/root/.local/share/mise/installs/java/21.0.2/bin:/root/.local/share/mise/installs/maven/3.9.10/apache-maven-3.9.10/bin:/root/.local/share/mise/installs/ruby/3.4.4/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/bin:/root/.local/share/mise/installs/elixir/1.18.3-otp-27/.mix/escripts:/opt/codex/tmp/arg0/codex-arg0k5AE7P:/root/.phpenv/bin:/root/.phpenv/shims:/usr/local/go/bin:/root/go/bin:/root/.swiftly/bin:/root/.local/bin:/root/.pyenv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin  ← value pattern ('/root/.phpenv/shims:/root/.cargo/bin:/ro')
+    [0;31m●[0m  READABLE: /root/.gitconfig  (0644  uid=0  gid=0  size=105)
+
+  Filter commands (run on saved output):
+    All RISK:  grep '\[RISK\]' <outfile>
+    All WARN:  grep '\[WARN\]' <outfile>
+    Section:   grep -A 200 '4\. PRIVILEGE' <outfile>
+
+=== AUDIT END 2026-04-22 06:40:07.137140 ===
+Output saved to: logs/audit_full_latest.log
