@@ -1,4 +1,4 @@
-# Cúper Y. Ashraf
+# Cúper Anas
 
 I build systems that have to answer to reality: agents that stop before they fabricate, tools that keep humans in the loop, and experiments where the edge cases are the point.
 
@@ -6,7 +6,7 @@ Right now that means AI agents, formal verification, product-shaped tools, syste
 
 ## Start Here
 
-- [Portfolio](https://cuuper22.github.io) - retro desktop portfolio with project writeups, screenshots, and an inspection map.
+- [Portfolio](https://cuuper22.pages.dev) - retro desktop portfolio with project writeups, screenshots, and an inspection map.
 - [gpu_stack](https://github.com/Cuuper22/gpu_stack-) - the GPU training stack as one SymPy equation graph, from cost-per-token down to quark counts, with the missing assumptions left visible.
 - [Erdos](https://github.com/Cuuper22/Erdos) - multi-agent theorem-proving loop around Lean 4, with theorem locking to catch specification gaming.
 - [ToaruOS-Arnold](https://github.com/Cuuper22/ToaruOS-Arnold) - bare-metal x86 desktop OS in ArnoldC, including GUI, games, input, and networking experiments.
@@ -32,4 +32,4 @@ The pattern I care about is not "I used framework X." It is whether the project 
 
 AI and physics coursework at Minerva University. Taught ML/AI to 250+ students at iD Tech. Ranked 5th nationally in Egypt.
 
-[Portfolio](https://cuuper22.github.io) · [LinkedIn](https://linkedin.com/in/cuuper)
+[Portfolio](https://cuuper22.pages.dev) · [LinkedIn](https://linkedin.com/in/yousefanas)
