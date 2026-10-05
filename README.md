@@ -2,7 +2,7 @@
 
 I build systems that have to answer to reality: agents that stop before they fabricate, tools that keep humans in the loop, and experiments where the edge cases are the point.
 
-Right now that means AI agents, formal verification, product-shaped tools, systems-and-physics modeling, and the awkward but important question of when automation should refuse to act.
+Right now that means AI agents, systems-and-physics modeling, and the awkward but important question of when automation should refuse to act.
 
 **[cuuper22.pages.dev](https://cuuper22.pages.dev)** is my portfolio: a retro×futuristic desktop where the projects run live. ToaruOS-Arnold boots in your browser, Erdos replays a solve, and there's a DOS prompt if you'd rather type. In a hurry? **[Quick read](https://cuuper22.pages.dev/read/)** has everything on one plain page.
 
@@ -31,12 +31,6 @@ The pattern I care about is not "I used framework X." It is whether the project 
 ## What I optimize for
 
 - Build the thing far enough that the hard boundary shows up.
-- Make the human hand-off explicit: what the system can decide, what it must surface, and where it should stop.
-- Prefer projects with an audit trail: tests, artifacts, screenshots, runbooks, or at least enough structure that a reviewer can verify the claim.
 - Write READMEs as inspection guides, not trophy cases.
-
-## Background
-
-AI and physics coursework at Minerva University. Taught ML/AI to 250+ students at iD Tech. Fine-tuned multilingual LLMs for a mental-health chatbot at Findhope. Ranked 5th nationally in Egypt.
 
 [Portfolio](https://cuuper22.pages.dev) · [Quick read](https://cuuper22.pages.dev/read/) · [LinkedIn](https://linkedin.com/in/yousefanas) · [Email](mailto:cuuper225@gmail.com)
